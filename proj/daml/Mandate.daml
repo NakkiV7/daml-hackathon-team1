@@ -17,11 +17,12 @@ module Mandate where
 
 template Mandate
   with
-    owner    : Party      -- who is paying
-    spender  : Party      -- merchant, or agent
-    cap      : Decimal    -- total they may spend over the mandate's life
-    spent    : Decimal    -- how much so far
-    expiresAt : Time
+    owner          : Party      -- who is paying
+    spender        : Party      -- merchant, or agent
+    cap            : Decimal    -- total they may spend over the mandate's life
+    spent          : Decimal    -- how much so far
+    expiresAt      : Time
+    counterparties : [Party]    -- allow-list: spender may only pay these parties
   where
     ensure cap > 0.0 && spent >= 0.0 && spent <= cap
 
@@ -29,9 +30,12 @@ template Mandate
     -- consenting, and the spender cannot be bound without consenting.
     signatory owner, spender
 
-    -- Spend within the mandate. No owner signature needed, that is the point.
+    -- Spend within the mandate, to an allow-listed counterparty. No owner
+    -- signature needed, that is the point.
     choice Charge : ContractId Mandate
-      with amount : Decimal
+      with
+        counterparty : Party
+        amount       : Decimal
       controller spender
       do
         now <- getTime
@@ -39,6 +43,8 @@ template Mandate
         assertMsg "mandate expired" (now < expiresAt)
         assertMsg "amount must be positive" (amount > 0.0)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
+        assertMsg "counterparty is not on the allow-list"
+          (counterparty `elem` counterparties)
         create this with spent = spent + amount
 
     -- The owner can always stop it, and the spender cannot block that.
@@ -46,13 +52,16 @@ template Mandate
       controller owner
       do pure ()
 
-    -- Raising the cap needs both parties, because both are signatories.
+    -- Raising the cap or changing who the agent may pay needs both
+    -- parties, because both are signatories.
     choice Adjust : ContractId Mandate
-      with newCap : Decimal
+      with
+        newCap            : Decimal
+        newCounterparties : [Party]
       controller owner, spender
       do
         assertMsg "new cap below what is already spent" (newCap >= spent)
-        create this with cap = newCap
+        create this with cap = newCap, counterparties = newCounterparties
 
 
 -- Propose and accept: the most common shape in Daml.
@@ -60,17 +69,18 @@ template Mandate
 -- rarely online at the same time. So you offer, and they accept later.
 template MandateProposal
   with
-    owner    : Party
-    spender  : Party
-    cap      : Decimal
-    expiresAt : Time
+    owner          : Party
+    spender        : Party
+    cap            : Decimal
+    expiresAt      : Time
+    counterparties : [Party]
   where
     signatory owner
     observer spender
 
     choice Accept : ContractId Mandate
       controller spender
-      do create Mandate with owner; spender; cap; spent = 0.0; expiresAt
+      do create Mandate with owner; spender; cap; spent = 0.0; expiresAt; counterparties
 
     choice Reject : ()
       controller spender
