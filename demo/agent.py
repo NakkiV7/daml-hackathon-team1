@@ -23,11 +23,16 @@ import live as L
 
 # What the agent wants to buy this cycle. `expect` is what SHOULD happen, and is
 # only used to score the run afterwards -- the agent does not consult it.
+# Plain-English names for the statement and the UI. The ledger party ids are
+# fixed, so this is purely presentation.
+VENDOR_LABELS = {"team1aws": "Cloud vendor", "team1owner": "Unapproved vendor",
+                 "team1agent": "AI agent"}
+
 BACKLOG = [
     {"item": "GPU hours for the nightly training run", "amount": 30,  "vendor": "team1aws",   "expect": "allow"},
     {"item": "Object storage top-up",                  "amount": 15,  "vendor": "team1aws",   "expect": "allow"},
     {"item": "Reserved capacity, annual commitment",   "amount": 450, "vendor": "team1aws",   "expect": "block"},
-    {"item": "Inference credits from a new vendor",    "amount": 20,  "vendor": "team1owner", "expect": "block"},
+    {"item": "Inference credits from an unapproved vendor", "amount": 20, "vendor": "team1owner", "expect": "block"},
     {"item": "Log retention extension",                "amount": 25,  "vendor": "team1aws",   "expect": "allow"},
     {"item": "Refund of a duplicate invoice",          "amount": -40, "vendor": "team1aws",   "expect": "block"},
     {"item": "Extra CI runners for the release",       "amount": 20,  "vendor": "team1aws",   "expect": "allow"},
@@ -46,7 +51,7 @@ def run(mandate_cid, agent_party, on_event=None, pause=0.0):
         ok, cid, why = L.charge(cid, agent_party, step["amount"], full)
         r = {
             "item": step["item"], "amount": step["amount"],
-            "vendor": step["vendor"].split("::")[0],
+            "vendor": VENDOR_LABELS.get(step["vendor"], step["vendor"].split("::")[0]),
             "allowed": ok,
             "reason": None if ok else why,
             "expected": step["expect"],

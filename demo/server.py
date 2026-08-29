@@ -54,6 +54,51 @@ except Exception as e:
 # Live-mode handles. OWNER grants, AGENT spends, PAYEE is the approved payee.
 LIVE = {"mandateCid": None, "owner": None, "agent": None, "payee": None}
 
+# The ledger party names were chosen early and are meaningless to anyone from
+# outside ("team1aws"). The party ids cannot be renamed once allocated, and the
+# Canton Coin is held by team1agent, so we keep the ids and show plain English.
+LABELS = {
+    "team1owner": "Business",       # the company whose money it is
+    "team1agent": "AI agent",       # the agent spending on the company's behalf
+    "team1aws":   "Cloud vendor",   # the one supplier the business approved
+}
+# Anything a user or the agent might type, mapped back to a party hint.
+ALIASES = {
+    "business": "team1owner", "owner": "team1owner", "company": "team1owner",
+    "ai agent": "team1agent", "agent": "team1agent",
+    "cloud vendor": "team1aws", "vendor": "team1aws", "cloud": "team1aws",
+    "aws": "team1aws",
+    # A real party that is deliberately NOT on the allow-list, so a payment to it
+    # is refused for the right reason rather than for being a malformed party id.
+    "unapproved vendor": "team1owner", "unknown vendor": "team1owner",
+    "attacker": "team1owner",
+}
+
+
+def label(party):
+    """Plain-English name for a party id, falling back to the raw hint."""
+    if not party:
+        return None
+    hint = party.split("::")[0]
+    return LABELS.get(hint, hint)
+
+
+def resolve_payee(name, p):
+    """Turn whatever the user typed into a full party id.
+
+    Accepts a label ("Cloud vendor"), a party hint ("team1aws") or a full party
+    id. Anything unrecognised is passed through untouched, so typing a name that
+    is not on the allow-list still reaches the ledger and gets refused there --
+    which is the behaviour we want to demonstrate.
+    """
+    if not name:
+        return name
+    if "::" in name:
+        return name
+    hint = ALIASES.get(str(name).strip().lower(), str(name).strip())
+    return {"team1owner": p["owner"], "team1agent": p["agent"],
+            "team1aws": p["payee"]}.get(hint, name)
+
 
 def live_parties_setup():
     if not LIVE["owner"]:
@@ -185,7 +230,8 @@ def get_state():
 # LIVE mode: every rule below is enforced by Mandate.daml on Canton, not here.
 # ---------------------------------------------------------------------------
 def _short(p):
-    return p.split("::")[0] if p else None
+    """Display name for a party. Plain English, not the raw ledger hint."""
+    return label(p)
 
 
 def live_state():
@@ -242,9 +288,9 @@ def live_charge(amount, payee):
     p = live_parties_setup()
     if not LIVE["mandateCid"]:
         raise ValueError("no mandate on the ledger yet — grant one first")
-    # Resolve a short name to a full party id so the allow-list check is real.
-    full = {"team1aws": p["payee"], "aws": p["payee"],
-            "team1owner": p["owner"], "team1agent": p["agent"]}.get(payee, payee)
+    # Resolve whatever was typed to a full party id, so the ledger's allow-list
+    # check is against a real party rather than a display string.
+    full = resolve_payee(payee, p)
     ok, cid, why = L.charge(LIVE["mandateCid"], p["agent"], amount, full)
     LIVE["mandateCid"] = cid
     if not ok and _stale(why):
@@ -444,14 +490,16 @@ def live_parties():
     if not C8LAB_OK:
         raise ValueError(f"c8lab import failed: {C8LAB_ERR}")
     p = live_parties_setup()
+    roles = {"owner": "whose money it is", "agent": "spends on their behalf",
+             "payee": "the approved supplier"}
     out = []
-    for role in ("owner", "agent", "payee"):
+    for role, note in roles.items():
         full = p[role]
         bal = L.balance_or_none(full)
-        out.append({"role": role, "party": full, "name": _short(full),
-                    "balance": bal,
-                    "balanceKnown": bal is not None,
-                    "hosted": P.lookup(_short(full)) is not None})
+        out.append({"role": role, "note": note, "party": full,
+                    "name": label(full), "ledgerName": full.split("::")[0],
+                    "balance": bal, "balanceKnown": bal is not None,
+                    "hosted": P.lookup(full.split("::")[0]) is not None})
     return {"parties": out,
             "note": "the node also knows ~125k other parties; these are ours"}
 

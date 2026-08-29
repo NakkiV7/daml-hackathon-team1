@@ -510,7 +510,7 @@
         </div>
         <div class="field">
           <label for="cps">Allowed counterparties</label>
-          <input id="cps" value="team1aws" />
+          <input id="cps" value="Cloud vendor" />
         </div>
         <div class="field">
           <label for="hours">Expires in (hours)</label>
@@ -529,7 +529,7 @@
         </div>
         <div class="field">
           <label for="payee">Payee</label>
-          <input id="payee" value="team1aws" />
+          <input id="payee" value="Cloud vendor" />
         </div>
         <div class="button-row">
           <button class="btn-primary" onclick="doCharge()">Charge</button>
@@ -572,6 +572,21 @@
     </section>
 
 
+
+    <section class="card">
+      <h3 class="panel-title">Adversarial checks</h3>
+      <p class="status-note muted" style="margin-top:0">
+        What a compromised or manipulated agent would try. A prompt can talk a
+        model into <em>attempting</em> any of these. None of them succeed, because
+        the limit is a rule in the contract rather than a check in the agent's
+        reasoning.
+      </p>
+      <div id="atk"></div>
+      <div class="button-row" style="margin-top:10px">
+        <button class="btn-primary" onclick="runAllAttacks()">Attempt all four</button>
+      </div>
+      <div id="atkScore" class="status-note muted" style="margin-top:8px"></div>
+    </section>
     <section class="card">
       <h3 class="panel-title">Settlement</h3>
       <p class="status-note muted" style="margin-top:0">
@@ -656,7 +671,7 @@
         const d = await api("/api/parties");
         c.innerHTML = d.parties.map(p =>
             '<div style="font-size:12px">'
-            + '<b>' + p.role + '</b> ' + p.name
+            + '<b>' + p.name + '</b> <span class="muted">(' + p.note + ')</span>'
             + (p.hosted ? '' : ' <span class="danger-text">(not hosted here)</span>')
             + ' · ' + (p.balanceKnown ? p.balance.toFixed(4) + ' Amulet'
                                       : '<span class="danger-text">balance unknown</span>')
@@ -681,17 +696,21 @@
       }
     }
 
-    async function doCharge() {
+    // amt/pay override the form fields; quiet suppresses the toast. The
+    // adversarial runner uses all three, the Charge button uses none.
+    async function doCharge(amt, pay, quiet) {
+      const body = {
+        amount: amt !== undefined ? amt : Number(document.getElementById("amount").value),
+        payee: (pay !== undefined ? pay : document.getElementById("payee").value).trim(),
+      };
       try {
-        const d = await api("/api/charge", "POST", {
-          amount: Number(document.getElementById("amount").value),
-          payee: document.getElementById("payee").value.trim(),
-        });
-        toast(`Charge approved: ${d.amount} to ${d.payee}`, true);
-        refresh();
+        const d = await api("/api/charge", "POST", body);
+        if (!quiet) toast(`Charge approved: ${d.amount} to ${d.payee}`, true);
+        if (!quiet) refresh();
+        return { ok: true, data: d };
       } catch (e) {
-        toast(`Rejected: ${e.message}`, false);
-        refresh();
+        if (!quiet) { toast(`Rejected: ${e.message}`, false); refresh(); }
+        return { ok: false, error: e.message };
       }
     }
 
@@ -871,6 +890,52 @@
       } catch (e) { toast(e.message, false); }
     }
 
+
+    const ATTACKS = [
+      { label: "Spend more than the period allows",
+        why: "one large charge inside an otherwise valid mandate",
+        amount: 999, payee: "Cloud vendor" },
+      { label: "Pay a supplier nobody approved",
+        why: "move money to a party outside the allow-list",
+        amount: 5, payee: "Unapproved vendor" },
+      { label: "Use a negative amount",
+        why: "run the balance backwards to manufacture headroom",
+        amount: -50, payee: "Cloud vendor" },
+      { label: "Spend more than the whole budget",
+        why: "ask for far more than the mandate was ever given",
+        amount: 100000, payee: "Cloud vendor" },
+    ];
+
+    function renderAttacks() {
+      document.getElementById("atk").innerHTML =
+        '<table class="mini"><thead><tr><th>Attempt</th><th class="r">Amount</th>'
+        + '<th>Payee</th><th>Result</th><th>Reason the ledger gave</th></tr></thead><tbody>'
+        + ATTACKS.map((a, i) =>
+            '<tr><td>' + a.label + '<div class="muted" style="font-size:11.5px">' + a.why + '</div></td>'
+            + '<td class="r">' + a.amount.toFixed(2) + '</td>'
+            + '<td>' + a.payee + '</td>'
+            + '<td id="atkR' + i + '" class="muted">not run</td>'
+            + '<td id="atkW' + i + '" class="muted"></td></tr>').join("")
+        + '</tbody></table>';
+    }
+
+    async function runAllAttacks() {
+      let blocked = 0;
+      for (let i = 0; i < ATTACKS.length; i++) {
+        const a = ATTACKS[i];
+        document.getElementById("atkR" + i).textContent = "…";
+        const r = await doCharge(a.amount, a.payee, true);
+        const cell = document.getElementById("atkR" + i);
+        const why  = document.getElementById("atkW" + i);
+        if (r.ok) { cell.innerHTML = '<span class="danger-text">went through</span>'; why.textContent = ""; }
+        else { cell.innerHTML = '<span class="positive">refused</span>'; why.textContent = r.error; blocked++; }
+      }
+      document.getElementById("atkScore").innerHTML =
+        '<b>' + blocked + ' of ' + ATTACKS.length + '</b> attempts refused by the ledger'
+        + (blocked === ATTACKS.length ? '' : ' — one got through, which is a bug');
+      await refresh(); await loadMetrics();
+    }
+
     async function refresh() {
       const d = await api("/api/state");
       const state = document.getElementById("state");
@@ -913,6 +978,7 @@
     refresh();
     loadMetrics();
     loadSettlement();
+    renderAttacks();
   </script>
 </body>
 </html>
