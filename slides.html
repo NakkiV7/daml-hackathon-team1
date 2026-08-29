@@ -163,7 +163,7 @@
 
 <!-- ============================================================ 1 -->
 <section class="slide on">
-  <div class="step"><span>Cantor8 hackathon · track D1</span><span class="t">Canton DevNet</span></div>
+  <div class="step"><span>Track D1 · spend-limited wallet for an AI agent</span><span class="t">Canton DevNet</span></div>
   <h1>An AI agent that cannot overspend, because the ledger will not let it.</h1>
   <p class="lead">
     A Daml mandate on Canton holds the budget, the approved payee, the expiry and
@@ -171,12 +171,12 @@
   </p>
   <div class="cols" style="margin-top:40px">
     <div class="panel">
-      <div class="hd">What this deck covers</div>
+      <div class="hd">Contents</div>
       <div class="bd">
         <ul class="tight">
-          <li>Twelve test cases, each with the button pressed and the value expected</li>
+          <li>Twelve cases, each with the operation performed and the value returned</li>
           <li>The line of Daml that produces each refusal</li>
-          <li>What to do when DevNet stalls mid-demo</li>
+          <li>Failure modes on a shared testnet, and how each is handled</li>
         </ul>
       </div>
     </div>
@@ -195,7 +195,7 @@
 
 <!-- ============================================================ 2 -->
 <section class="slide">
-  <div class="step"><span>Problem</span><span class="t">0:00 – 0:15</span></div>
+  <div class="step"><span>Problem</span><span class="t">Why the limit cannot sit in the agent</span></div>
   <h2>The usual answer is to hand the agent a wallet key.</h2>
   <div class="cols wide">
     <div>
@@ -211,7 +211,7 @@
         contract.
       </p>
       <div class="panel" style="margin-top:24px">
-        <div class="hd">Cantor8 has already published in this space</div>
+        <div class="hd">Prior work in this area</div>
         <div class="bd">
           <ul class="tight" style="margin:0">
             <li>World's First Private AI Agent Payment Settles on Canton Network, April 2026</li>
@@ -236,7 +236,7 @@
 
 <!-- ============================================================ 3 -->
 <section class="slide">
-  <div class="step"><span>Architecture</span><span class="t">who decides what</span></div>
+  <div class="step"><span>Architecture</span><span class="t">Where each decision is made</span></div>
   <h2>The browser asks, the backend submits, Canton decides.</h2>
   <div class="flow">
     <div class="node">
@@ -328,12 +328,12 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 5 -->
 <section class="slide">
-  <div class="step"><span>Test 1 · live connection</span><span class="t">0:15 – 0:25</span></div>
-  <h2>Prove it is the real network before claiming anything else.</h2>
+  <div class="step"><span>Case 1 · ledger connectivity</span><span class="t">Read path</span></div>
+  <h2>Confirming the ledger is live before anything is claimed of it.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
-        <dt>press</dt>
+        <dt>operation</dt>
         <dd><span class="btn-name">Check ledger</span> then <span class="btn-name">Parties</span></dd>
         <dt>what the backend does</dt>
         <dd class="mono" style="font-size:15px">
@@ -367,7 +367,7 @@ choice Charge : ContractId Mandate
         </div>
       </div>
       <div class="freeze">
-        <div class="lab">if it stalls</div>
+        <div class="lab">failure mode</div>
         <p>
           One of DevNet's load-balancer addresses black-holes traffic, so a read
           occasionally hangs. Reads use a 3 second timeout and retry up to five
@@ -382,7 +382,7 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 6 -->
 <section class="slide">
-  <div class="step"><span>Test 2 · grant a mandate</span><span class="t">0:25 – 0:40</span></div>
+  <div class="step"><span>Case 2 · granting a mandate</span><span class="t">Propose and accept</span></div>
   <h2>Propose and accept, so neither party is bound without consenting.</h2>
   <div class="cols wide">
     <div>
@@ -395,7 +395,7 @@ choice Charge : ContractId Mandate
           Approved payee <span class="field">Cloud vendor</span> ·
           Expires in <span class="field">720</span>
         </dd>
-        <dt>press</dt>
+        <dt>operation</dt>
         <dd><span class="btn-name">Grant mandate</span></dd>
         <dt>two ledger transactions</dt>
         <dd style="font-size:15px">
@@ -422,7 +422,7 @@ choice Charge : ContractId Mandate
         </div>
       </div>
       <div class="freeze">
-        <div class="lab">if it stalls</div>
+        <div class="lab">failure mode</div>
         <p>
           Writes are never retried automatically. DevNet returns 503 while still
           forwarding the command, so a retry races the original, and Canton then
@@ -438,14 +438,14 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 7 -->
 <section class="slide">
-  <div class="step"><span>Test 3 · a charge that should work</span><span class="t">0:40 – 0:55</span></div>
+  <div class="step"><span>Case 3 · an authorised charge</span><span class="t">Atomic state change</span></div>
   <h2>One atomic transaction updates the budget and writes the audit record.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
         <dt>fields</dt>
         <dd class="mono" style="font-size:15px">Amount <span class="field">25</span> · Payee <span class="field">Cloud vendor</span></dd>
-        <dt>press</dt>
+        <dt>operation</dt>
         <dd><span class="btn-name">Charge</span></dd>
       </dl>
       <div class="verdict">
@@ -482,7 +482,7 @@ choice Charge : ContractId Mandate
         </div>
       </div>
       <div class="freeze">
-        <div class="lab">note</div>
+        <div class="lab">scope</div>
         <p>
           Charging 25 authorises on the ledger but cannot settle, because the
           agent holds only 5 Amulet. The response says
@@ -496,14 +496,14 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 8 -->
 <section class="slide">
-  <div class="step"><span>Test 4 · exceed the period cap</span><span class="t">0:55 – 1:10</span></div>
-  <h2>The first thing a judge will try.</h2>
+  <div class="step"><span>Case 4 · period cap</span><span class="t">Rate limit</span></div>
+  <h2>A charge larger than the remaining daily budget is refused.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
         <dt>fields</dt>
         <dd class="mono" style="font-size:15px">Amount <span class="field">999</span> · Payee <span class="field">Cloud vendor</span></dd>
-        <dt>press</dt>
+        <dt>operation</dt>
         <dd><span class="btn-name">Charge</span></dd>
       </dl>
       <div class="verdict no">
@@ -527,7 +527,7 @@ choice Charge : ContractId Mandate
         human time to notice and revoke.
       </p>
       <div class="freeze">
-        <div class="lab">the window does not reset on a timer</div>
+        <div class="lab">window semantics</div>
         <p>
           Nothing in Daml runs on a schedule. <code>Charge</code> rolls the
           window forward when it next runs, advancing by whole periods from
@@ -541,8 +541,8 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 9 -->
 <section class="slide">
-  <div class="step"><span>Test 5 · exceed the lifetime cap</span><span class="t">follow-up question</span></div>
-  <h2>If asked for the lifetime cap specifically, the daily cap has to be raised out of the way.</h2>
+  <div class="step"><span>Case 5 · lifetime cap</span><span class="t">Evaluation order</span></div>
+  <h2>The lifetime rule is only reachable when the daily cap sits above it.</h2>
   <div class="cols wide">
     <div>
       <p>
@@ -554,7 +554,7 @@ choice Charge : ContractId Mandate
       <dl class="kv">
         <dt>grant</dt>
         <dd class="mono" style="font-size:15px">Lifetime cap <span class="field">100</span> · Period cap <span class="field">1000</span></dd>
-        <dt>then charge</dt>
+        <dt>subsequent charge</dt>
         <dd class="mono" style="font-size:15px">90 → accepted, then 20</dd>
       </dl>
       <div class="verdict no">
@@ -575,8 +575,8 @@ choice Charge : ContractId Mandate
         </div>
       </div>
       <p style="font-size:15px;margin-top:20px">
-        Worth saying out loud rather than hiding: the message you get names the
-        first rule that failed, not every rule that would have.
+        The message names the first rule that failed, not every rule that would
+        have. Evaluation short-circuits at the first assertion to break.
       </p>
       <div class="verdict">
         <div class="lab">arithmetic</div>
@@ -588,14 +588,14 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 10 -->
 <section class="slide">
-  <div class="step"><span>Test 6 · pay someone it should not</span><span class="t">1:10 – 1:22</span></div>
-  <h2>Inside the budget, outside the allow-list.</h2>
+  <div class="step"><span>Case 6 · counterparty allow-list</span><span class="t">Exfiltration</span></div>
+  <h2>A payment within budget to a party outside the allow-list is refused.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
         <dt>fields</dt>
         <dd class="mono" style="font-size:15px">Amount <span class="field">5</span> · Payee <span class="field">Unapproved vendor</span></dd>
-        <dt>press</dt>
+        <dt>operation</dt>
         <dd><span class="btn-name">Charge</span></dd>
       </dl>
       <div class="verdict no">
@@ -612,19 +612,19 @@ choice Charge : ContractId Mandate
 <pre>assertMsg <span class="hl">"payee not in allow-list"</span>
           (payee `elem` counterparties)</pre>
       <div class="panel" style="margin-top:22px">
-        <div class="hd">A detail worth pre-empting</div>
+        <div class="hd">Party resolution</div>
         <div class="bd">
           <p style="font-size:15px;margin:0">
             <em>Unapproved vendor</em> resolves to a real party the node hosts,
             not a malformed name. So the refusal is genuinely the allow-list
             rejecting an existing party, rather than Canton rejecting an invalid
-            party id. If a judge types a random string it is refused too, but for
-            the less interesting reason.
+            party id. An arbitrary string is refused too, but as a malformed party
+            rather than an unapproved one.
           </p>
         </div>
       </div>
       <div class="freeze">
-        <div class="lab">also refused</div>
+        <div class="lab">related case</div>
         <p>
           Amount <code>-50</code> to the approved vendor returns
           <code>amount must be positive</code>. A negative charge would otherwise
@@ -637,16 +637,16 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 11 -->
 <section class="slide">
-  <div class="step"><span>Test 7 · revocation</span><span class="t">1:22 – 1:37</span></div>
-  <h2>The owner stops it alone, and the agent cannot delay that.</h2>
+  <div class="step"><span>Case 7 · revocation</span><span class="t">Owner authority</span></div>
+  <h2>The owner revokes alone, and the agent cannot delay it.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
-        <dt>press</dt>
+        <dt>operation</dt>
         <dd><span class="btn-name">Revoke now</span></dd>
         <dt>expect</dt>
         <dd class="mono" style="font-size:15px">Live mandate shows <b class="no-t">REVOKED</b>; top rail reads <em>mandate revoked</em></dd>
-        <dt>then charge</dt>
+        <dt>subsequent charge</dt>
         <dd class="mono" style="font-size:15px">Amount <span class="field">5</span> · Payee <span class="field">Cloud vendor</span></dd>
       </dl>
       <div class="verdict no">
@@ -687,12 +687,12 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 12 -->
 <section class="slide">
-  <div class="step"><span>Test 8 · the agent works unattended</span><span class="t">1:37 – 1:50</span></div>
-  <h2>Seven purchases the agent chose, three of which it was wrong about.</h2>
+  <div class="step"><span>Case 8 · unattended operation</span><span class="t">Autonomous agent</span></div>
+  <h2>Seven purchases chosen by the agent, three of them wrong.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
-        <dt>press</dt><dd><span class="btn-name">Grant mandate</span> then <span class="btn-name">Run the agent</span></dd>
+        <dt>operation</dt><dd><span class="btn-name">Grant mandate</span> then <span class="btn-name">Run the agent</span></dd>
       </dl>
       <div class="panel q" style="margin-top:18px">
         <div class="hd">Expected outcome, item by item</div>
@@ -726,7 +726,7 @@ choice Charge : ContractId Mandate
       </div>
       <div style="margin-top:30px"><div class="big">100%</div><div class="cap">verdicts matching a correct implementation</div></div>
       <div class="freeze">
-        <div class="lab">grant a fresh mandate before each run</div>
+        <div class="lab">precondition</div>
         <p>
           The backlog needs about 90 of the 100 daily budget. Run it against a
           part-spent mandate and a legitimate purchase is refused for lack of
@@ -741,12 +741,12 @@ choice Charge : ContractId Mandate
 
 <!-- ============================================================ 13 -->
 <section class="slide">
-  <div class="step"><span>Test 9 · audit and statement</span><span class="t">what an auditor reads</span></div>
+  <div class="step"><span>Case 9 · audit and statement</span><span class="t">Accountability</span></div>
   <h2>Every action, and the permission that allowed it.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
-        <dt>press</dt><dd><span class="btn-name">Statement</span>, and scroll the audit trail</dd>
+        <dt>operation</dt><dd><span class="btn-name">Statement</span>, with the audit trail alongside</dd>
         <dt>expect</dt>
         <dd style="font-size:15px">
           One row per attempt, accepted and refused alike, each with the deciding
@@ -774,12 +774,12 @@ Refund of a duplicate invoice          -40.00  declined
         property an auditor actually cares about.
       </p>
       <div class="freeze">
-        <div class="lab">why the list is short</div>
+        <div class="lab">scoping</div>
         <p>
           Audit contracts accumulate across every mandate this owner has ever
           held, and testing left 113 of them. The view is scoped to records created
-          since the mandate on screen was granted, so a demo opens clean. The
-          older ones are still on the ledger.
+          since the mandate in view was granted, so a fresh session starts clean.
+          The earlier records remain on the ledger.
         </p>
       </div>
     </div>
@@ -788,18 +788,18 @@ Refund of a duplicate invoice          -40.00  declined
 
 <!-- ============================================================ 14 -->
 <section class="slide">
-  <div class="step"><span>Test 10 · settlement</span><span class="t">1:50 – 2:00</span></div>
+  <div class="step"><span>Case 10 · settlement</span><span class="t">Moving Canton Coin</span></div>
   <h2>Authorisation and settlement are two transactions, in that order.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
-        <dt>press</dt><dd><span class="btn-name">Pay 0.1 for real</span></dd>
+        <dt>operation</dt><dd><span class="btn-name">Pay 0.1 for real</span></dd>
         <dt>expect · balances</dt>
         <dd class="mono" style="font-size:15px">
           AI agent&nbsp;&nbsp;&nbsp;&nbsp;5.0000 → 4.9000 &nbsp;<span class="no-t">−0.1</span><br />
           Cloud vendor&nbsp;0.0000 → 0.1000 &nbsp;<span class="ok-t">+0.1</span>
         </dd>
-        <dt>then</dt><dd><span class="btn-name">Return the coin</span> sweeps it back so the demo repeats</dd>
+        <dt>reset</dt><dd><span class="btn-name">Return the coin</span> sweeps the balance back, so the case is repeatable</dd>
       </dl>
       <div class="verdict">
         <div class="lab">expected · settlement detail</div>
@@ -826,12 +826,12 @@ Refund of a duplicate invoice          -40.00  declined
         </div>
       </div>
       <div class="freeze">
-        <div class="lab">scale, stated plainly</div>
+        <div class="lab">scale</div>
         <p>
           The agent holds about 5 Amulet while its authorisation cap is 500. The
           cap is therefore demonstrated by refusal, not by exhausting the
-          balance. Each demo costs roughly 0.1 in network fees. Both parties are
-          ours, so nothing leaves the team.
+          balance. Each settlement run costs roughly 0.1 in network fees, and both
+          parties belong to this project, so no value leaves it.
         </p>
       </div>
     </div>
@@ -840,13 +840,13 @@ Refund of a duplicate invoice          -40.00  declined
 
 <!-- ============================================================ 15 -->
 <section class="slide">
-  <div class="step"><span>Test 11 · kill it mid-flight</span><span class="t">judges said they would</span></div>
-  <h2>Stopping the backend loses nothing, because the state was never ours.</h2>
+  <div class="step"><span>Case 11 · process failure</span><span class="t">Durability</span></div>
+  <h2>Stopping the backend loses no state, because the application never held it.</h2>
   <div class="cols wide">
     <div>
       <dl class="kv">
-        <dt>do</dt>
-        <dd class="mono" style="font-size:15px">Ctrl-C the terminal, then ./run.sh, then reload</dd>
+        <dt>operation</dt>
+        <dd class="mono" style="font-size:15px">SIGINT the backend, restart it, reload the page</dd>
         <dt>expect</dt>
         <dd style="font-size:15px">
           The same mandate, with the same <code>spent</code>, and charging
@@ -865,7 +865,7 @@ Refund of a duplicate invoice          -40.00  declined
     </div>
     <div>
       <div class="panel">
-        <div class="hd">A related refusal, worth expecting on camera</div>
+        <div class="hd">A related refusal</div>
         <div class="bd">
           <p style="font-size:15px;margin:0 0 10px">
             <code>Contract could not be found with id 00…</code>
@@ -881,7 +881,7 @@ Refund of a duplicate invoice          -40.00  declined
         </div>
       </div>
       <div class="freeze">
-        <div class="lab">which failures are retried</div>
+        <div class="lab">retry policy</div>
         <p>
           Reads are retried, five attempts at a 3 second timeout each. Writes are
           never retried, because a stalled submission may still be in flight. The
@@ -895,17 +895,17 @@ Refund of a duplicate invoice          -40.00  declined
 
 <!-- ============================================================ 16 -->
 <section class="slide">
-  <div class="step"><span>When it goes wrong on camera</span><span class="t">every message you might see</span></div>
-  <h2>Each failure has a known cause and a known response.</h2>
+  <div class="step"><span>Failure modes</span><span class="t">Cause and recovery</span></div>
+  <h2>Each failure has an identified cause and a defined recovery.</h2>
   <div class="panel q">
     <div class="bd" style="padding:0">
       <table>
-        <thead><tr><th>Message</th><th>Cause</th><th>What to do</th></tr></thead>
+        <thead><tr><th>Message</th><th>Cause</th><th>Recovery</th></tr></thead>
         <tbody>
           <tr>
             <td class="mono">HTTP 503 … /v2/commands/</td>
             <td>DevNet refused a write under load</td>
-            <td>Press the button again. Fresh command id, safe.</td>
+            <td>Resubmit. Each submission carries a fresh command id.</td>
           </tr>
           <tr>
             <td class="mono">SUBMISSION_ALREADY_IN_FLIGHT</td>
@@ -915,7 +915,7 @@ Refund of a duplicate invoice          -40.00  declined
           <tr>
             <td class="mono">Contract could not be found</td>
             <td>Contract id superseded by a charge elsewhere</td>
-            <td>Press again; the backend re-reads and retries.</td>
+            <td>Resubmit; the backend re-reads and retries once.</td>
           </tr>
           <tr>
             <td class="mono">read operation timed out</td>
@@ -925,7 +925,7 @@ Refund of a duplicate invoice          -40.00  declined
           <tr>
             <td class="mono">balance unknown</td>
             <td>Balance query failed</td>
-            <td>Not a zero balance. Press Re-check.</td>
+            <td>Not a zero balance. Re-query.</td>
           </tr>
           <tr>
             <td class="mono">only 4.20 of budget left …</td>
@@ -947,28 +947,28 @@ Refund of a duplicate invoice          -40.00  declined
     </div>
   </div>
   <p style="margin-top:22px;font-size:15px">
-    None of these are the wallet failing. The wallet failing would look like a
-    charge going through when it should not, and that is the one case none of our
-    twelve tests produces.
+    None of these represent the wallet failing. A failure would be a charge
+    succeeding when a rule should have refused it, and that outcome did not occur
+    in any of the twelve cases.
   </p>
 </section>
 
 <!-- ============================================================ 17 -->
 <section class="slide">
-  <div class="step"><span>Test 12 · the same rules through an LLM</span><span class="t">MCP</span></div>
+  <div class="step"><span>Case 12 · model-driven access</span><span class="t">MCP tools</span></div>
   <h2>The tools a language model drives reach the ledger by the same path.</h2>
   <div class="cols wide">
     <div>
       <p>
         An MCP server exposes the wallet as tools over stdio JSON-RPC. Early on
         those tools called the backend's simulation helpers rather than the live
-        ledger, which would have meant an LLM was policed by Python while the
-        demo claimed Canton was doing it. They now go through one shared
+        ledger, which would have meant a model was policed by Python while the
+        system claimed Canton was doing it. They now go through one shared
         dispatch, so the HTTP buttons, the autonomous agent and the LLM all take
         the same route.
       </p>
       <div class="panel">
-        <div class="hd">Simulating a manipulated model</div>
+        <div class="hd">Calls a manipulated model might make</div>
         <div class="bd" style="padding:0">
           <table>
             <thead><tr><th>Tool call</th><th>Verdict</th></tr></thead>
@@ -991,7 +991,7 @@ Refund of a duplicate invoice          -40.00  declined
         cannot reach.
       </p>
       <div class="freeze">
-        <div class="lab">borrowed vocabulary, deliberately</div>
+        <div class="lab">prior art</div>
         <p>
           Google's Agent Payments Protocol calls its primitive a
           <em>mandate</em>: a signed grant carrying constraints for when the human
@@ -1006,8 +1006,8 @@ Refund of a duplicate invoice          -40.00  declined
 
 <!-- ============================================================ 18 -->
 <section class="slide">
-  <div class="step"><span>What is real, and what is not</span><span class="t">stated before being asked</span></div>
-  <h2>Overclaiming costs more than an unfinished build.</h2>
+  <div class="step"><span>Scope</span><span class="t">Implemented and not implemented</span></div>
+  <h2>What the implementation does, and where it stops.</h2>
   <div class="cols">
     <div class="panel">
       <div class="hd" style="color:var(--blue)">Live on Canton DevNet</div>
@@ -1044,8 +1044,8 @@ Refund of a duplicate invoice          -40.00  declined
 
 <!-- ============================================================ 19 -->
 <section class="slide">
-  <div class="step"><span>Numbers</span><span class="t">measured, not estimated</span></div>
-  <h2>What the twelve tests produced.</h2>
+  <div class="step"><span>Results</span><span class="t">Measured</span></div>
+  <h2>What the twelve cases produced.</h2>
   <div class="cols">
     <div>
       <div class="cols" style="gap:26px">
@@ -1073,14 +1073,14 @@ Refund of a duplicate invoice          -40.00  declined
               <tr><td class="mono">allow-list</td><td>Unapproved vendor</td></tr>
               <tr><td class="mono">positive amount</td><td>−50, −40</td></tr>
               <tr><td class="mono">revoked</td><td>any charge after Revoke</td></tr>
-              <tr><td class="mono">expiry</td><td>covered by Daml script, not on camera</td></tr>
+              <tr><td class="mono">expiry</td><td>covered by Daml script rather than interactively</td></tr>
             </tbody>
           </table>
         </div>
       </div>
       <p style="font-size:15px;margin-top:20px">
-        Expiry is the one rule easier to prove in a test than in a demo, since it
-        needs the clock moved forward. <code>daml test</code> does that in
+        Expiry is easier to prove in a script than interactively, since it needs
+        the ledger clock moved forward. <code>daml test</code> does that in
         memory.
       </p>
     </div>
@@ -1089,7 +1089,7 @@ Refund of a duplicate invoice          -40.00  declined
 
 <!-- ============================================================ 20 -->
 <section class="slide">
-  <div class="step"><span>Close</span><span class="t">the sentence to end on</span></div>
+  <div class="step"><span>Summary</span><span class="t">Track D1</span></div>
   <h1>The agent may attempt anything. The ledger decides.</h1>
   <p class="lead" style="margin-bottom:34px">
     The business grants a budget, a daily limit, one approved supplier and instant
