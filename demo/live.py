@@ -75,8 +75,11 @@ def _retrying_request(url, body=None, headers=None, method=None, timeout=None):
     writing = "/v2/commands/" in url
     attempts = 1 if writing else RETRIES
     # Submissions legitimately take longer than a read, so give them the full
-    # timeout rather than the short one tuned for spotting a dead IP.
-    per_try = 30.0 if writing else CONNECT_TIMEOUT
+    # timeout rather than the short one tuned for spotting a dead IP. Some reads
+    # are heavy too: /v2/parties returns 10k records a page, which cannot finish
+    # in the short window even on a healthy connection.
+    heavy = "/v2/parties" in url and "?" not in url and url.rstrip("/").endswith("parties")
+    per_try = 30.0 if (writing or heavy) else CONNECT_TIMEOUT
     last = None
     for attempt in range(attempts):
         try:

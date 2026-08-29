@@ -46,6 +46,7 @@ except Exception as e:
 try:
     import live as L
     import agent as AG
+    import parties as P          # party lookup / allocation helpers
     LIVE_OK, LIVE_ERR = True, None
 except Exception as e:
     LIVE_OK, LIVE_ERR = False, str(e)
@@ -433,10 +434,26 @@ def live_ledger():
 
 
 def live_parties():
+    """Our own parties and what they hold.
+
+    Deliberately not a dump of /v2/parties: DevNet knows about ~125k parties
+    across paginated pages, which is both slow to fetch and useless to look at.
+    What matters is the three parties this demo acts as, whether the node hosts
+    them, and their balance.
+    """
     if not C8LAB_OK:
         raise ValueError(f"c8lab import failed: {C8LAB_ERR}")
-    ps = c8lab.local_parties()
-    return {"count": len(ps), "parties": ps[:25]}
+    p = live_parties_setup()
+    out = []
+    for role in ("owner", "agent", "payee"):
+        full = p[role]
+        bal = L.balance_or_none(full)
+        out.append({"role": role, "party": full, "name": _short(full),
+                    "balance": bal,
+                    "balanceKnown": bal is not None,
+                    "hosted": P.lookup(_short(full)) is not None})
+    return {"parties": out,
+            "note": "the node also knows ~125k other parties; these are ours"}
 
 
 class Handler(BaseHTTPRequestHandler):

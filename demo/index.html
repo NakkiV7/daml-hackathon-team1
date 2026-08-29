@@ -651,9 +651,16 @@
 
     async function loadParties() {
       const c = document.getElementById("conn");
+      c.innerHTML = "reading our parties…";
       try {
         const d = await api("/api/parties");
-        c.innerHTML = `<span class="positive">${d.count} parties</span> available on the node`;
+        c.innerHTML = d.parties.map(p =>
+            '<div style="font-size:12px">'
+            + '<b>' + p.role + '</b> ' + p.name
+            + (p.hosted ? '' : ' <span class="danger-text">(not hosted here)</span>')
+            + ' · ' + (p.balanceKnown ? p.balance.toFixed(4) + ' Amulet'
+                                      : '<span class="danger-text">balance unknown</span>')
+            + '</div>').join("");
       } catch (e) {
         c.innerHTML = `<span class="danger-text">Failed</span> · ${e.message}`;
       }
