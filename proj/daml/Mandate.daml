@@ -17,11 +17,12 @@ module Mandate where
 
 template Mandate
   with
-    owner    : Party      -- who is paying
-    spender  : Party      -- merchant, or agent
-    cap      : Decimal    -- total they may spend over the mandate's life
-    spent    : Decimal    -- how much so far
-    counterparties : [Party]  -- the ONLY parties the spender may pay
+    owner          : Party      -- who is paying
+    spender        : Party      -- merchant, or agent
+    cap            : Decimal    -- total they may spend over the mandate's life
+    spent          : Decimal    -- how much so far
+    expiresAt      : Time
+    counterparties : [Party]    -- allow-list: spender may only pay these parties
     expiresAt : Time
     revoked  : Bool       -- true once the owner revokes the mandate
   where
@@ -31,9 +32,11 @@ template Mandate
     -- consenting, and the spender cannot be bound without consenting.
     signatory owner, spender
 
-    -- Spend within the mandate. No owner signature needed, that is the point.
+    -- Spend within the mandate, to an allow-listed counterparty. No owner
+    -- signature needed, that is the point.
     choice Charge : ContractId Mandate
       with
+        counterparty : Party
         amount : Decimal
         payee  : Party        -- who the spender wants to pay
       controller spender
@@ -44,8 +47,10 @@ template Mandate
         assertMsg "amount must be positive" (amount > 0.0)
         assertMsg "mandate revoked" (not revoked)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
+        
         -- Allow-list: the spender may only pay approved counterparties.
-        assertMsg "payee not in allow-list" (payee `elem` counterparties)
+        assertMsg "counterparty is not on the allow-list"
+        (counterparty `elem` counterparties)
         newMandateCid <- create this with spent = spent + amount
         create MandateChargeAudit with
           owner
@@ -72,13 +77,16 @@ template Mandate
           reason = "owner revocation"
         pure newMandateCid
 
-    -- Raising the cap needs both parties, because both are signatories.
+    -- Raising the cap or changing who the agent may pay needs both
+    -- parties, because both are signatories.
     choice Adjust : ContractId Mandate
-      with newCap : Decimal
+      with
+        newCap            : Decimal
+        newCounterparties : [Party]
       controller owner, spender
       do
         assertMsg "new cap below what is already spent" (newCap >= spent)
-        create this with cap = newCap
+        create this with cap = newCap, counterparties = newCounterparties
 
 
 template MandateChargeAudit
@@ -111,18 +119,18 @@ template MandateRevokeAudit
 -- rarely online at the same time. So you offer, and they accept later.
 template MandateProposal
   with
-    owner    : Party
-    spender  : Party
-    cap      : Decimal
+    owner          : Party
+    spender        : Party
+    cap            : Decimal
+    expiresAt      : Time
     counterparties : [Party]
-    expiresAt : Time
   where
     signatory owner
     observer spender
 
     choice Accept : ContractId Mandate
       controller spender
-      do create Mandate with owner; spender; cap; spent = 0.0; counterparties; expiresAt
+      do create Mandate with owner; spender; cap; spent = 0.0; expiresAt; counterparties
 
     choice Reject : ()
       controller spender
