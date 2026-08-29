@@ -580,9 +580,11 @@
       </p>
       <div id="settle" class="status-note muted">checking…</div>
       <div class="button-row" style="margin-top:10px">
+        <button class="btn-primary" onclick="settleDemo()">Pay 0.1 for real</button>
         <button class="btn-ghost" onclick="loadSettlement()">Re-check</button>
-        <button class="btn-ghost" onclick="doPreapproval()">Request preapproval</button>
+        <button class="btn-ghost" onclick="sweepBack()">Return the coin</button>
       </div>
+      <div id="settleOut" style="margin-top:12px"></div>
     </section>
     <section class="card">
       <h3 class="panel-title">What is real, and what is not</h3>
@@ -595,13 +597,14 @@
             <li>Every rejection is an <code>AssertionFailed</code> returned by Canton</li>
             <li>Charge and revoke audit records are contracts on the ledger</li>
             <li>Killing this backend loses nothing: the state lives on the ledger</li>
+            <li>Canton Coin really moves: a charge transfers Amulet and the payee's balance changes</li>
           </ul>
         </div>
         <div>
           <h4>Not done yet</h4>
           <ul>
-            <li>No Canton Coin moves. <code>Charge</code> authorises and records spend; it does not transfer Amulet</li>
-            <li>The parties hold a zero balance, so settlement is unproven</li>
+            <li>Only 0.1 Canton Coin moves per settlement demo, and the agent holds about 5</li>
+            <li>The agent's spend cap is 500 but its coin balance is 5, so the cap is proven by refusal rather than by exhaustion</li>
             <li>The allow-list is fixed when the mandate is granted</li>
             <li>Period windows roll forward on the next charge, not on a timer</li>
           </ul>
@@ -826,6 +829,39 @@
     async function doPreapproval() {
       try { await api("/api/preapproval", "POST", {}); toast("preapproval requested", true); }
       catch (e) { toast(e.message, false); }
+    }
+
+
+    async function settleDemo() {
+      const el = document.getElementById("settleOut");
+      el.innerHTML = '<div class="status-note muted">authorising on the ledger, then moving coin…</div>';
+      try {
+        const d = await api("/api/settle/demo", "POST", { amount: 0.1 });
+        el.innerHTML =
+          '<table class="mini"><thead><tr><th>Party</th><th class="r">Before</th>'
+          + '<th class="r">After</th><th class="r">Change</th></tr></thead><tbody>'
+          + '<tr><td>agent</td><td class="r">' + d.before.agent.toFixed(4) + '</td><td class="r">'
+          + d.after.agent.toFixed(4) + '</td><td class="r no-t">' + d.delta.agent + '</td></tr>'
+          + '<tr><td>payee</td><td class="r">' + d.before.payee.toFixed(4) + '</td><td class="r">'
+          + d.after.payee.toFixed(4) + '</td><td class="r ok-t">+' + d.delta.payee + '</td></tr>'
+          + '</tbody></table>'
+          + '<div class="status-note muted" style="margin-top:8px">authorised by the mandate, then settled as a '
+          + d.settlement.transferKind + ' transfer'
+          + (d.settlement.accepted ? ', accepted by the payee' : '') + '.</div>';
+        toast("moved " + d.amount + " Canton Coin for real", true);
+        await refresh(); await loadMetrics(); await loadSettlement();
+      } catch (e) {
+        el.innerHTML = '<div class="status-note no-t">' + e.message + '</div>';
+        toast(e.message, false);
+      }
+    }
+
+    async function sweepBack() {
+      try {
+        const d = await api("/api/sweep", "POST", {});
+        toast("returned " + d.swept + " to the agent", true);
+        await loadSettlement();
+      } catch (e) { toast(e.message, false); }
     }
 
     async function refresh() {

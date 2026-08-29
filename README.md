@@ -83,12 +83,32 @@ gets refused by the ledger rather than by a check in our code.
 Killing the backend mid-flight loses nothing. The mandate is a contract on
 Canton, so a fresh process reads it back with the correct `spent` and carries on.
 
+## Settlement
+
+Authorisation and settlement are separate, in that order. `Charge` asks the
+mandate for permission on-ledger; a token-standard transfer then moves the
+Amulet. They cannot be one step: a transfer needs disclosed contracts fetched
+from the registry for that single transaction, which a Daml choice body cannot go
+and get. An unauthorised charge never reaches the settlement code at all.
+
+A transfer arrives as `direct` when the receiver holds a live
+TransferPreapproval, and as an `offer` otherwise -- and an offer does not move
+the receiver's balance until it is accepted. We accept on the payee's behalf, so
+a single click authorises, transfers and lands the money:
+
+```
+agent  4.0000 -> 3.9000   (-0.1)
+payee  1.0000 -> 1.1000   (+0.1)
+```
+
 ## Honest limits
 
-- **No Canton Coin moves yet.** Our parties hold a zero balance. `Charge` is the
-  authorisation step and it is genuinely live; settlement is wired
-  (`demo/live.py`, `L.settle`) and will run as soon as the parties are funded.
-  The Settlement panel shows exactly what is missing.
+- **Canton Coin really moves, in small amounts.** The settlement demo transfers
+  0.1 Amulet per run and the agent holds about 5, so we prove settlement works
+  rather than running the cap down to zero. The agent's authorisation cap is 500
+  while its balance is 5: the cap is demonstrated by refusal, not by exhaustion.
+  Both the agent and payee parties are ours, so "Return the coin" sweeps it back
+  and nothing is consumed.
 - The allow-list is fixed when the mandate is granted.
 - Period windows roll forward on the next charge rather than on a timer, because
   nothing in Daml runs on a schedule. The roll-forward is anchored to

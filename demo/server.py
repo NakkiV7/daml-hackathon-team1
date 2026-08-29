@@ -284,6 +284,34 @@ def agent_run():
     return {"results": results, "score": AG.score(results)}
 
 
+def settle_demo(amount=0.1):
+    """One real Canton Coin payment, end to end, with balances either side.
+
+    Kept separate from the agent run on purpose. The agent's backlog is
+    denominated for the AUTHORISATION story (a 450 charge has to be refused by
+    the period cap), and those numbers are far larger than the coin we actually
+    hold. This proves settlement with an amount that fits the real balance.
+    """
+    p = live_parties_setup()
+    if not LIVE["mandateCid"]:
+        raise ValueError("no mandate on the ledger yet — grant one first")
+    before = {"agent": L.balance(p["agent"]), "payee": L.balance(p["payee"])}
+    if before["agent"] < amount:
+        raise ValueError(f"agent holds {before['agent']} Canton Coin, needs {amount}")
+
+    ok, cid, why = L.charge(LIVE["mandateCid"], p["agent"], amount, p["payee"])
+    LIVE["mandateCid"] = cid
+    if not ok:
+        raise ValueError(f"the ledger refused the charge: {why}")
+
+    moved, detail = L.settle(p["agent"], p["payee"], amount)
+    after = {"agent": L.balance(p["agent"]), "payee": L.balance(p["payee"])}
+    return {"amount": amount, "authorised": True, "settled": moved,
+            "settlement": detail, "before": before, "after": after,
+            "delta": {"agent": round(after["agent"] - before["agent"], 4),
+                      "payee": round(after["payee"] - before["payee"], 4)}}
+
+
 def metrics():
     """Everything countable, from the on-ledger audit plus this session."""
     s = live_state() if MODE == "live" else get_state()
@@ -435,6 +463,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_revoke())
             if self.path == "/api/agent/run":
                 return self._send(200, agent_run())
+            if self.path == "/api/settle/demo":
+                return self._send(200, settle_demo(float(b.get("amount", 0.1))))
+            if self.path == "/api/accept":
+                p = live_parties_setup()
+                return self._send(200, {"accepted": L.accept_pending(p["agent"])
+                                                  + L.accept_pending(p["payee"])})
+            if self.path == "/api/sweep":
+                # Both parties are ours, so nothing is ever lost -- this just
+                # moves the payee's coin back so the demo can run again.
+                p = live_parties_setup()
+                bal = L.balance(p["payee"])
+                if bal <= 0:
+                    return self._send(200, {"swept": 0.0, "note": "payee holds nothing"})
+                ok, detail = L.settle(p["payee"], p["agent"], bal)
+                return self._send(200, {"swept": bal, "ok": ok, "detail": detail,
+                                        "agentBalance": L.balance(p["agent"])})
             if self.path == "/api/preapproval":
                 p = live_parties_setup()
                 return self._send(200, {"result": str(L.preapprove(p["payee"]))[:200]})

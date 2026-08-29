@@ -227,15 +227,61 @@ def preapprove(receiver, provider=None):
     return c8lab.create_preapproval_proposal(receiver, provider or receiver)
 
 
-def settle(sender, receiver, amount, instrument="Amulet"):
+def pending_instructions(receiver):
+    """Transfer offers waiting for `receiver` to accept."""
+    body = {"filter": {"filtersByParty": {receiver: {"cumulative": [
+                {"identifierFilter": {"InterfaceFilter": {"value": {
+                    "interfaceId": c8lab.TRANSFER_INSTRUCTION,
+                    "includeInterfaceView": True,
+                    "includeCreatedEventBlob": False}}}}]}}},
+            "verbose": False, "activeAtOffset": c8lab.ledger_end()}
+    out = []
+    for item in c8lab.call("/v2/state/active-contracts", body):
+        ev = item.get("contractEntry", {}).get("JsActiveContract", {}).get("createdEvent", {})
+        for iv in ev.get("interfaceViews", []):
+            v = iv.get("viewValue") or {}
+            t = v.get("transfer") or {}
+            out.append({"contractId": ev.get("contractId"),
+                        "sender": t.get("sender"), "receiver": t.get("receiver"),
+                        "amount": t.get("amount")})
+    return out
+
+
+def accept_pending(receiver):
+    """Accept every offer waiting for `receiver`. Returns what was accepted."""
+    done = []
+    for i in pending_instructions(receiver):
+        try:
+            c8lab.accept_transfer(i["contractId"], receiver)
+            done.append({"amount": i["amount"], "from": (i["sender"] or "").split("::")[0]})
+        except c8lab.LabError as e:
+            done.append({"amount": i["amount"], "error": str(e).splitlines()[0][:120]})
+    return done
+
+
+def settle(sender, receiver, amount, instrument="Amulet", auto_accept=True):
     """Move Canton Coin. Returns (ok, detail).
 
     Called only after the ledger has already authorised the charge. If there is
     no coin yet this fails cleanly and says so, rather than pretending.
+
+    A transfer comes back as `direct` when the receiver holds a live
+    TransferPreapproval, and as `offer` otherwise -- and an offer does not move
+    the receiver's balance until they accept it. Since the demo controls the
+    payee party, we accept on their behalf so the money actually arrives.
     """
     try:
         r = c8lab.transfer(sender, receiver, str(amount), instrument=instrument)
-        return True, {"transferKind": r.get("transferKind"),
-                      "instructionCid": r.get("instructionCid")}
     except c8lab.LabError as e:
         return False, {"error": str(e).splitlines()[0][:200]}
+
+    detail = {"transferKind": r.get("transferKind"),
+              "instructionCid": r.get("instructionCid")}
+    if auto_accept and r.get("transferKind") == "offer" and r.get("instructionCid"):
+        try:
+            c8lab.accept_transfer(r["instructionCid"], receiver)
+            detail["accepted"] = True
+        except c8lab.LabError as e:
+            detail["accepted"] = False
+            detail["acceptError"] = str(e).splitlines()[0][:150]
+    return True, detail
