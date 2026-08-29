@@ -67,29 +67,36 @@ _raw_request = c8lab._request
 
 
 def _retrying_request(url, body=None, headers=None, method=None, timeout=None):
-    # Never retry a command submission. A submit that stalls client-side may
-    # already have committed on the ledger, so resending it either duplicates the
-    # effect or -- because c8lab reuses the commandId within one call -- comes
-    # back as DUPLICATE_COMMAND and destroys an otherwise successful charge.
-    # Reads are idempotent and safe to repeat.
     writing = "/v2/commands/" in url
-    attempts = 1 if writing else RETRIES
     # Submissions legitimately take longer than a read, so give them the full
     # timeout rather than the short one tuned for spotting a dead IP. Some reads
     # are heavy too: /v2/parties returns 10k records a page, which cannot finish
     # in the short window even on a healthy connection.
     heavy = "/v2/parties" in url and "?" not in url and url.rstrip("/").endswith("parties")
     per_try = 30.0 if (writing or heavy) else CONNECT_TIMEOUT
+    attempts = RETRIES
     last = None
     for attempt in range(attempts):
         try:
             return _raw_request(url, body, headers, method, timeout=per_try)
         except c8lab.LabError as e:
             msg = str(e)
-            retryable = ("timed out" in msg or "timeout" in msg.lower()
-                         or "cannot reach" in msg or "network error" in msg
-                         or "HTTP 503" in msg or "HTTP 502" in msg)
             last = e
+            if writing:
+                # Retrying a submission is safe *because the body is byte-identical*,
+                # commandId included: if the first attempt did commit, Canton answers
+                # DUPLICATE_COMMAND rather than charging twice, and callers treat that
+                # as "our contract id is stale" and re-read from the ledger.
+                # Only retry gateway-level refusals and stalls, where the command
+                # most likely never reached the ledger at all. A 4xx is a real
+                # verdict -- an assertion failure, say -- and must surface as-is.
+                retryable = ("HTTP 503" in msg or "HTTP 502" in msg
+                             or "HTTP 504" in msg or "timed out" in msg
+                             or "cannot reach" in msg or "network error" in msg)
+            else:
+                retryable = ("timed out" in msg or "timeout" in msg.lower()
+                             or "cannot reach" in msg or "network error" in msg
+                             or "HTTP 503" in msg or "HTTP 502" in msg)
             if not retryable or attempt == attempts - 1:
                 raise
     raise last

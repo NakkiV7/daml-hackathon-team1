@@ -118,7 +118,10 @@ def _stale(msg):
     contract that has already been superseded.
     """
     m = str(msg)
-    return "could not be found" in m or "CONTRACT_NOT_FOUND" in m
+    # DUPLICATE_COMMAND means a retried submission had already committed, so the
+    # ledger has moved on and our contract id is behind. Same remedy: re-read.
+    return ("could not be found" in m or "CONTRACT_NOT_FOUND" in m
+            or "DUPLICATE_COMMAND" in m)
 
 
 def resync():
@@ -277,11 +280,25 @@ def live_state():
 
 def live_create(cap, period_cap, period_hours, _cps, hours):
     p = live_parties_setup()
-    prop = L.propose(p["owner"], p["agent"], [p["payee"]],
-                     cap, period_cap, period_hours, days=max(1, int(hours / 24)))
-    LIVE["mandateCid"] = L.accept(prop, p["agent"])
-    LIVE["rejects"] = []
-    return live_state()["mandate"]
+    days = max(1, int(hours / 24))
+    # A retried submission that had already committed comes back as
+    # DUPLICATE_COMMAND. c8lab mints a fresh commandId per submit() call, so
+    # simply issuing the command again is not a duplicate -- and an extra
+    # MandateProposal is harmless, it is only an offer until accepted.
+    last = None
+    for _ in range(2):
+        try:
+            prop = L.propose(p["owner"], p["agent"], [p["payee"]],
+                             cap, period_cap, period_hours, days=days)
+            LIVE["mandateCid"] = L.accept(prop, p["agent"])
+            LIVE["rejects"] = []
+            LIVE["agentResults"] = None
+            return live_state()["mandate"]
+        except c8lab.LabError as e:
+            last = e
+            if not _stale(e):
+                raise
+    raise ValueError(str(last).splitlines()[0])
 
 
 def live_charge(amount, payee):
