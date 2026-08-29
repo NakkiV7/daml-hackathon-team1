@@ -19,11 +19,12 @@ import DA.Time
 
 template Mandate
   with
-    owner    : Party      -- who is paying
-    spender  : Party      -- merchant, or agent
-    cap      : Decimal    -- total they may spend over the mandate's life
-    spent    : Decimal    -- how much so far
-    counterparties : [Party]  -- the ONLY parties the spender may pay
+    owner          : Party      -- who is paying
+    spender        : Party      -- merchant, or agent
+    cap            : Decimal    -- total they may spend over the mandate's life
+    spent          : Decimal    -- how much so far
+    expiresAt      : Time
+    counterparties : [Party]    -- allow-list: spender may only pay these parties
     expiresAt : Time
     -- Per-period limit: at most periodCap per periodLength, on top of the
     -- lifetime cap. Nothing runs on a timer in Daml, so the period cannot
@@ -34,6 +35,7 @@ template Mandate
     periodSpent  : Decimal  -- spent within the current window
     periodStart  : Time     -- start of the current window
     periodLength : RelTime
+    revoked  : Bool       -- true once the owner revokes the mandate
   where
     ensure cap > 0.0 && spent >= 0.0 && spent <= cap
       && periodCap > 0.0 && periodSpent >= 0.0 && periodSpent <= periodCap
@@ -43,9 +45,11 @@ template Mandate
     -- consenting, and the spender cannot be bound without consenting.
     signatory owner, spender
 
-    -- Spend within the mandate. No owner signature needed, that is the point.
+    -- Spend within the mandate, to an allow-listed counterparty. No owner
+    -- signature needed, that is the point.
     choice Charge : ContractId Mandate
       with
+        counterparty : Party
         amount : Decimal
         payee  : Party        -- who the spender wants to pay
       controller spender
@@ -67,13 +71,18 @@ template Mandate
                        else periodStart
             curPeriodSpent = if rolledOver then 0.0 else periodSpent
         assertMsg "charge would exceed the period cap" (curPeriodSpent + amount <= periodCap)
+        assertMsg "mandate revoked" (not revoked)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
+        
         -- Allow-list: the spender may only pay approved counterparties.
         assertMsg "payee not in allow-list" (payee `elem` counterparties)
         newMandateCid <- create this with
           spent = spent + amount
           periodSpent = curPeriodSpent + amount
           periodStart = curStart
+        assertMsg "counterparty is not on the allow-list"
+        (counterparty `elem` counterparties)
+        newMandateCid <- create this with spent = spent + amount
         create MandateChargeAudit with
           owner
           spender
@@ -86,26 +95,30 @@ template Mandate
         pure newMandateCid
 
     -- The owner can always stop it, and the spender cannot block that.
-    -- Choices are consuming by default, so a successful Revoke archives this
-    -- mandate on the ledger. Any later Charge against its contract id fails.
-    choice Revoke : ()
+    -- Keep the mandate alive so the ledger can show a clear revoked state and
+    -- connect the revocation event directly to the mandate's current record.
+    choice Revoke : ContractId Mandate
       controller owner
       do
         now <- getTime
+        newMandateCid <- create this with revoked = True
         create MandateRevokeAudit with
           owner
           spender
           at = now
           reason = "owner revocation"
-        pure ()
+        pure newMandateCid
 
-    -- Raising the cap needs both parties, because both are signatories.
+    -- Raising the cap or changing who the agent may pay needs both
+    -- parties, because both are signatories.
     choice Adjust : ContractId Mandate
-      with newCap : Decimal
+      with
+        newCap            : Decimal
+        newCounterparties : [Party]
       controller owner, spender
       do
         assertMsg "new cap below what is already spent" (newCap >= spent)
-        create this with cap = newCap
+        create this with cap = newCap, counterparties = newCounterparties
 
 
 template MandateChargeAudit
@@ -138,9 +151,10 @@ template MandateRevokeAudit
 -- rarely online at the same time. So you offer, and they accept later.
 template MandateProposal
   with
-    owner    : Party
-    spender  : Party
-    cap      : Decimal
+    owner          : Party
+    spender        : Party
+    cap            : Decimal
+    expiresAt      : Time
     counterparties : [Party]
     expiresAt : Time
     periodCap    : Decimal
