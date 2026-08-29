@@ -1,0 +1,44 @@
+module TestMandateAllowList where
+
+import Daml.Script
+import DA.Time
+import Mandate
+
+
+-- Proves the counterparty allow-list is enforced by the ledger, not the API:
+--   * a charge to an approved counterparty succeeds;
+--   * a charge to a party NOT on the allow-list is rejected on the ledger;
+--   * the rejection holds even when the amount is within the cap.
+allowListTest : Script ()
+allowListTest = script do
+  owner    <- allocateParty "Owner"
+  agent    <- allocateParty "Agent"
+  approved <- allocateParty "ApprovedMerchant"
+  stranger <- allocateParty "Stranger"
+  now <- getTime
+
+  proposalCid <- submit owner do
+    createCmd MandateProposal with
+      owner
+      spender = agent
+      cap = 100.0
+      counterparties = [approved]
+      expiresAt = addRelTime now (days 1)
+
+  mandateCid <- submit agent do
+    exerciseCmd proposalCid Accept
+
+  -- Paying an approved counterparty, within the cap, works.
+  mandateCid <- submit agent do
+    exerciseCmd mandateCid Charge with amount = 20.0; payee = approved
+
+  -- Paying a party NOT on the allow-list fails ON THE LEDGER, even though
+  -- the amount (5.0) is well within the remaining cap. This is the point:
+  -- the allow-list is a rule, not a suggestion in a backend.
+  submitMustFail agent do
+    exerciseCmd mandateCid Charge with amount = 5.0; payee = stranger
+
+  -- One charge audit exists (the approved one), the rejected one recorded nothing.
+  chargeEntries <- query @MandateChargeAudit owner
+  assert (length chargeEntries == 1)
+  pure ()

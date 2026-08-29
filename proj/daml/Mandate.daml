@@ -21,6 +21,7 @@ template Mandate
     spender  : Party      -- merchant, or agent
     cap      : Decimal    -- total they may spend over the mandate's life
     spent    : Decimal    -- how much so far
+    counterparties : [Party]  -- the ONLY parties the spender may pay
     expiresAt : Time
   where
     ensure cap > 0.0 && spent >= 0.0 && spent <= cap
@@ -31,7 +32,9 @@ template Mandate
 
     -- Spend within the mandate. No owner signature needed, that is the point.
     choice Charge : ContractId Mandate
-      with amount : Decimal
+      with
+        amount : Decimal
+        payee  : Party        -- who the spender wants to pay
       controller spender
       do
         now <- getTime
@@ -39,14 +42,17 @@ template Mandate
         assertMsg "mandate expired" (now < expiresAt)
         assertMsg "amount must be positive" (amount > 0.0)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
+        -- Allow-list: the spender may only pay approved counterparties.
+        assertMsg "payee not in allow-list" (payee `elem` counterparties)
         newMandateCid <- create this with spent = spent + amount
         create MandateChargeAudit with
           owner
           spender
+          payee
           amount
           newSpent = spent + amount
           at = now
-          rule = "total-cap check"
+          rule = "total-cap + allow-list check"
         pure newMandateCid
 
     -- The owner can always stop it, and the spender cannot block that.
@@ -76,6 +82,7 @@ template MandateChargeAudit
   with
     owner    : Party
     spender  : Party
+    payee    : Party
     amount   : Decimal
     newSpent : Decimal
     at       : Time
@@ -104,6 +111,7 @@ template MandateProposal
     owner    : Party
     spender  : Party
     cap      : Decimal
+    counterparties : [Party]
     expiresAt : Time
   where
     signatory owner
@@ -111,7 +119,7 @@ template MandateProposal
 
     choice Accept : ContractId Mandate
       controller spender
-      do create Mandate with owner; spender; cap; spent = 0.0; expiresAt
+      do create Mandate with owner; spender; cap; spent = 0.0; counterparties; expiresAt
 
     choice Reject : ()
       controller spender
