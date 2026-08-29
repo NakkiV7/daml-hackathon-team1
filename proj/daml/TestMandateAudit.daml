@@ -25,6 +25,7 @@ testAuditTrail = script do
       periodSpent = 0.0
       periodStart = now
       periodLength = days 30
+      revoked = False
 
   chargeCid <- submit spender do
     exerciseCmd mandateCid Charge with

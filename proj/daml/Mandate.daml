@@ -25,7 +25,6 @@ template Mandate
     spent          : Decimal    -- how much so far
     expiresAt      : Time
     counterparties : [Party]    -- allow-list: spender may only pay these parties
-    expiresAt : Time
     -- Per-period limit: at most periodCap per periodLength, on top of the
     -- lifetime cap. Nothing runs on a timer in Daml, so the period cannot
     -- reset itself when time passes: Charge rolls the window forward lazily,
@@ -49,7 +48,6 @@ template Mandate
     -- signature needed, that is the point.
     choice Charge : ContractId Mandate
       with
-        counterparty : Party
         amount : Decimal
         payee  : Party        -- who the spender wants to pay
       controller spender
@@ -80,9 +78,6 @@ template Mandate
           spent = spent + amount
           periodSpent = curPeriodSpent + amount
           periodStart = curStart
-        assertMsg "counterparty is not on the allow-list"
-        (counterparty `elem` counterparties)
-        newMandateCid <- create this with spent = spent + amount
         create MandateChargeAudit with
           owner
           spender
@@ -156,7 +151,6 @@ template MandateProposal
     cap            : Decimal
     expiresAt      : Time
     counterparties : [Party]
-    expiresAt : Time
     periodCap    : Decimal
     periodLength : RelTime
   where
@@ -174,6 +168,7 @@ template MandateProposal
           periodCap; periodLength
           periodSpent = 0.0
           periodStart = now
+          revoked = False
 
     choice Reject : ()
       controller spender

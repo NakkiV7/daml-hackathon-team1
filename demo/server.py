@@ -1,113 +1,142 @@
 #!/usr/bin/env python3
-"""Minimal backend for the D1 agent-wallet demo. Stdlib only, no pip install.
+"""Backend for the D1 agent-wallet demo. Stdlib only, no pip install.
 
-Bridges the browser frontend to the Canton ledger. The browser must never hold
-the Keycloak secret, so every ledger call goes through here.
+Bridges the browser to the Canton ledger. The browser must never hold the
+Keycloak secret, so every ledger call goes through here.
 
-It REUSES c8lab.py (per the toolkit README: "Import it, do not just use the CLI").
-c8lab reads its config from env vars at import time, so load DevNet env first:
+It REUSES c8lab.py (toolkit README: "Import it, do not just use the CLI").
+c8lab reads config from env at import time, so load DevNet env first:
 
     cd /Users/akq/daml-hackathon-team1
     set -a && source .env && set +a
     python3 demo/server.py
 
-Endpoints the frontend calls:
-  GET  /api/state                      -> mock mandate + audit log (D1 rules)
-  POST /api/mandate {cap,counterparties,hours}  -> create a mock mandate
-  POST /api/charge  {amount,payee}     -> agent spends (enforces cap+allow-list)
-  POST /api/revoke                     -> owner revokes
-  GET  /api/ledger                     -> LIVE: token check + ledger end (real C8)
-  GET  /api/parties                    -> LIVE: local parties on the node
+The mandate rules below MIRROR daml/Mandate.daml exactly: lifetime cap,
+per-period cap with lazy window roll-forward, counterparty allow-list,
+expiry, and a revoked flag. Real enforcement lives in the Daml contract;
+this mirror exists so the UI is demonstrable before a funded DevNet party.
 
-The mandate flow is MOCK (mirrors Mandate.daml exactly) because moving real
-value needs a funded DevNet party we do not have yet. The /api/ledger and
-/api/parties calls are LIVE through c8lab, to prove the connection is real.
+Endpoints:
+  GET  /api/state      mandate + audit log
+  GET  /api/ledger     LIVE: token + ledger end via c8lab
+  GET  /api/parties    LIVE: local parties on the node
+  POST /api/mandate    {cap, periodCap, periodHours, counterparties, hours}
+  POST /api/charge     {amount, payee}   -> enforces every rule
+  POST /api/revoke     owner kills it, agent cannot block
+  POST /api/reset      clear state for a clean demo
 """
 import json, os, sys, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("PORT", "8000"))
 
-# Import c8lab from the proj/ dir next to this demo/ dir.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proj"))
 try:
     import c8lab
-    C8LAB_OK = True
+    C8LAB_OK, C8LAB_ERR = True, None
 except Exception as e:
-    C8LAB_OK = False
-    C8LAB_ERR = str(e)
-
-
-# ---------------------------------------------------------------------------
-# MOCK ledger: mirrors the rules in Mandate.daml so the UI behaves like the
-# real contract. Swap for real ledger calls once a funded party exists.
-# ---------------------------------------------------------------------------
-STATE = {"mandate": None, "audit": [], "revoked": False}
+    C8LAB_OK, C8LAB_ERR = False, str(e)
 
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def create_mandate(cap, counterparties, hours):
+STATE = {"mandate": None, "audit": []}
+
+
+def _audit(entry):
+    entry["at"] = now().isoformat(timespec="seconds")
+    entry["seq"] = len(STATE["audit"]) + 1
+    STATE["audit"].append(entry)
+    return entry
+
+
+def create_mandate(cap, period_cap, period_hours, counterparties, hours):
+    t = now()
     STATE["mandate"] = {
-        "owner": "Owner", "spender": "Agent", "cap": float(cap), "spent": 0.0,
+        "owner": "Owner", "spender": "Agent",
+        "cap": float(cap), "spent": 0.0,
+        "periodCap": float(period_cap), "periodSpent": 0.0,
+        "periodStart": t.isoformat(timespec="seconds"),
+        "periodHours": float(period_hours),
         "counterparties": counterparties,
-        "expiresAt": (now() + datetime.timedelta(hours=float(hours))).isoformat(),
+        "expiresAt": (t + datetime.timedelta(hours=float(hours))).isoformat(timespec="seconds"),
+        "revoked": False,
     }
-    STATE["revoked"] = False
-    STATE["audit"] = [{"type": "created", "cap": float(cap),
-                       "counterparties": counterparties, "at": now().isoformat()}]
+    STATE["audit"] = []
+    _audit({"type": "created", "detail": f"cap {cap}, period {period_cap}/{period_hours}h",
+            "allow": counterparties, "status": "ok"})
     return STATE["mandate"]
 
 
 def charge(amount, payee):
-    """Same assertions as the Daml Charge choice. Raises on any rule breach."""
+    """Mirrors the Daml Charge choice, assertion for assertion."""
     m = STATE["mandate"]
     if m is None:
         raise ValueError("no mandate exists")
-    if STATE["revoked"]:
-        raise ValueError("mandate revoked")
-    amount = float(amount)
-    if now().isoformat() >= m["expiresAt"]:
-        raise ValueError("mandate expired")
+
+    def reject(rule, msg):
+        _audit({"type": "charge", "amount": amount, "payee": payee,
+                "status": "rejected", "rule": rule, "detail": msg})
+        raise ValueError(msg)
+
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        reject("amount must be positive", f"amount '{amount}' is not a number")
+
+    if m["revoked"]:
+        reject("mandate revoked", "mandate revoked")
+    if now() >= datetime.datetime.fromisoformat(m["expiresAt"]):
+        reject("mandate expired", "mandate expired")
     if amount <= 0:
-        raise ValueError("amount must be positive")
+        reject("amount must be positive", "amount must be positive")
+
+    # Lazy window roll-forward, anchored to periodStart (never to `now`, or the
+    # spender could slide the window by timing charges). Same as the Daml.
+    plen = datetime.timedelta(hours=m["periodHours"])
+    start = datetime.datetime.fromisoformat(m["periodStart"])
+    whole = int((now() - start) / plen)
+    rolled = whole >= 1
+    cur_start = start + whole * plen if rolled else start
+    cur_period_spent = 0.0 if rolled else m["periodSpent"]
+
+    if cur_period_spent + amount > m["periodCap"]:
+        reject("period cap", f"charge would exceed the period cap "
+                             f"({cur_period_spent} + {amount} > {m['periodCap']})")
     if m["spent"] + amount > m["cap"]:
-        raise ValueError(f"charge would exceed the cap "
-                         f"({m['spent']} + {amount} > {m['cap']})")
+        reject("total cap", f"charge would exceed the cap "
+                            f"({m['spent']} + {amount} > {m['cap']})")
     if payee not in m["counterparties"]:
-        raise ValueError(f"payee '{payee}' not in allow-list {m['counterparties']}")
+        reject("allow-list", f"payee '{payee}' not in allow-list {m['counterparties']}")
+
     m["spent"] += amount
-    entry = {"type": "charge", "amount": amount, "payee": payee,
-             "newSpent": m["spent"], "at": now().isoformat(),
-             "rule": "total-cap + allow-list check"}
-    STATE["audit"].append(entry)
-    return entry
+    m["periodSpent"] = cur_period_spent + amount
+    m["periodStart"] = cur_start.isoformat(timespec="seconds")
+    return _audit({"type": "charge", "amount": amount, "payee": payee,
+                   "status": "ok", "newSpent": m["spent"],
+                   "rule": ("period rolled over; " if rolled else "")
+                           + "period-cap + total-cap + allow-list"})
 
 
 def revoke():
-    if STATE["mandate"] is None:
+    m = STATE["mandate"]
+    if m is None:
         raise ValueError("no mandate exists")
-    STATE["revoked"] = True
-    entry = {"type": "revoke", "at": now().isoformat(), "reason": "owner revocation"}
-    STATE["audit"].append(entry)
-    return entry
+    m["revoked"] = True
+    return _audit({"type": "revoke", "status": "ok", "detail": "owner revocation"})
 
 
 def get_state():
-    return {"mandate": STATE["mandate"], "revoked": STATE["revoked"],
-            "audit": STATE["audit"], "c8lab": C8LAB_OK,
-            "base": (c8lab.BASE if C8LAB_OK else None)}
+    return {"mandate": STATE["mandate"], "audit": STATE["audit"],
+            "c8lab": C8LAB_OK, "base": (c8lab.BASE if C8LAB_OK else None)}
 
 
-# ---------------------------------------------------------------------------
-# LIVE calls through c8lab. These work TODAY (read-only, no funded party needed).
-# ---------------------------------------------------------------------------
 def live_ledger():
     if not C8LAB_OK:
         raise ValueError(f"c8lab import failed: {C8LAB_ERR}")
-    c8lab.token()  # raises LabError if auth fails
+    c8lab.token()
     return {"base": c8lab.BASE,
             "mode": "DevNet / Keycloak" if c8lab.IDP else "LocalNet",
             "token": "ok", "ledgerEnd": c8lab.ledger_end()}
@@ -117,12 +146,9 @@ def live_parties():
     if not C8LAB_OK:
         raise ValueError(f"c8lab import failed: {C8LAB_ERR}")
     ps = c8lab.local_parties()
-    return {"count": len(ps), "parties": ps[:25]}  # cap the list for the UI
+    return {"count": len(ps), "parties": ps[:25]}
 
 
-# ---------------------------------------------------------------------------
-# HTTP plumbing
-# ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         body = json.dumps(obj).encode()
@@ -157,10 +183,9 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(os.path.dirname(__file__), "index.html"), "rb") as f:
                     html = f.read()
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(html)
-                return
+                return self.wfile.write(html)
             self._send(404, {"error": "not found"})
         except ValueError as e:
             self._send(400, {"error": str(e)})
@@ -172,21 +197,25 @@ class Handler(BaseHTTPRequestHandler):
             b = self._body()
             if self.path == "/api/mandate":
                 return self._send(200, create_mandate(
-                    b.get("cap", 100), b.get("counterparties", ["Merchant"]),
-                    b.get("hours", 24)))
+                    b.get("cap", 500), b.get("periodCap", 100),
+                    b.get("periodHours", 24),
+                    b.get("counterparties", ["AWS", "OpenAI"]),
+                    b.get("hours", 720)))
             if self.path == "/api/charge":
                 return self._send(200, charge(b.get("amount"), b.get("payee")))
             if self.path == "/api/revoke":
                 return self._send(200, revoke())
+            if self.path == "/api/reset":
+                STATE["mandate"], STATE["audit"] = None, []
+                return self._send(200, {"ok": True})
             self._send(404, {"error": "not found"})
         except ValueError as e:
             self._send(400, {"error": str(e)})
 
 
 if __name__ == "__main__":
-    print(f"backend up on http://localhost:{PORT}")
-    print(f"c8lab imported: {C8LAB_OK}" + ("" if C8LAB_OK else f" ({C8LAB_ERR})"))
+    print(f"backend  http://localhost:{PORT}")
+    print(f"c8lab    {'imported' if C8LAB_OK else 'FAILED: ' + str(C8LAB_ERR)}")
     if C8LAB_OK:
-        print(f"ledger base:    {c8lab.BASE}")
-    print("open the URL in a browser")
+        print(f"ledger   {c8lab.BASE}")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
