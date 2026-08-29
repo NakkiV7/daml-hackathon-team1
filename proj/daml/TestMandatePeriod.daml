@@ -71,7 +71,7 @@ testPeriodCap = script do
   m <- submit agent do exerciseCmd m Charge with amount = 100.0; payee = shop
 
   -- The owner can still revoke instantly, mid-period.
-  submit alice do exerciseCmd m Revoke
+  m <- submit alice do exerciseCmd m Revoke
   submitMustFail agent do exerciseCmd m Charge with amount = 1.0; payee = shop
   pure ()
 
