@@ -1,0 +1,46 @@
+module TestMandateAudit where
+
+import Daml.Script
+import DA.Time
+import Mandate
+
+testAuditTrail : Script ()
+testAuditTrail = script do
+  owner <- allocatePartyByHint (PartyIdHint "Owner")
+  spender <- allocatePartyByHint (PartyIdHint "Spender")
+  merchant <- allocatePartyByHint (PartyIdHint "Merchant")
+
+  now <- getTime
+  let expiresAt = addRelTime now (hours 24)
+
+  mandateCid <- submitMulti [owner, spender] [] do
+    createCmd Mandate with
+      owner = owner
+      spender = spender
+      cap = 100.0
+      spent = 0.0
+      counterparties = [merchant]
+      expiresAt = expiresAt
+      periodCap = 100.0
+      periodSpent = 0.0
+      periodStart = now
+      periodLength = days 30
+
+  chargeCid <- submit spender do
+    exerciseCmd mandateCid Charge with
+      amount = 25.0
+      payee = merchant
+
+  chargeEntries <- query @MandateChargeAudit owner
+  assert (length chargeEntries == 1)
+
+  submitMustFail spender do
+    exerciseCmd chargeCid Charge with
+      amount = 90.0
+      payee = merchant
+
+  submit owner do
+    exerciseCmd chargeCid Revoke
+
+  revokeEntries <- query @MandateRevokeAudit owner
+  assert (length revokeEntries == 1)

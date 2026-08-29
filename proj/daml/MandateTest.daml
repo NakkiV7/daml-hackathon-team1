@@ -24,6 +24,8 @@ revocationTest = script do
       cap = 100.0
       counterparties = [merchant]
       expiresAt = addRelTime now (days 1)
+      periodCap = 100.0
+      periodLength = days 30
 
   mandateCid <- submit agent do
     exerciseCmd proposalCid Accept
