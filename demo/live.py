@@ -254,8 +254,16 @@ def recover(owner, spender=None):
             continue
         if spender and a.get("spender") != spender:
             continue
-        # An active, un-revoked mandate beats a revoked one; then most spent wins.
-        key = (0 if a.get("revoked") else 1, float(a.get("spent") or 0))
+        # Testing leaves plenty of spent-out and revoked mandates lying around.
+        # Rank on usefulness: not revoked, then still has headroom in both caps,
+        # then most spent (so a restart resumes the one actually in use rather
+        # than jumping to some pristine leftover).
+        spent = float(a.get("spent") or 0)
+        cap = float(a.get("cap") or 0)
+        pspent = float(a.get("periodSpent") or 0)
+        pcap = float(a.get("periodCap") or 0)
+        usable = (not a.get("revoked")) and spent < cap and pspent < pcap
+        key = (0 if a.get("revoked") else 1, 1 if usable else 0, spent)
         if best_key is None or key > best_key:
             best_key, best = key, (ev.get("contractId"), a)
     return best

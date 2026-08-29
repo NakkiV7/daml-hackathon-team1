@@ -1,5 +1,7 @@
-# Secrets — never commit
-.env
+# Secrets. .env IS committed here on purpose: this repo is private and the
+# DevNet credential is a shared hackathon secret the whole team already has, so
+# the alternative was every teammate being unable to start the demo. Do not copy
+# this pattern into anything real.
 .env.local
 .env.*.local
 devnet.env

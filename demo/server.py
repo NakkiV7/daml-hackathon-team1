@@ -62,6 +62,27 @@ def live_parties_setup():
     return LIVE
 
 
+def _stale(msg):
+    """Did the ledger reject this because our contract id is out of date?
+
+    Charge and Revoke are consuming choices: each one archives the mandate and
+    creates a successor. Anything holding the old id -- another browser tab, a
+    script run from the terminal, this process after someone else acted -- gets
+    CONTRACT_NOT_FOUND. It is not a real failure, we are just looking at a
+    contract that has already been superseded.
+    """
+    m = str(msg)
+    return "could not be found" in m or "CONTRACT_NOT_FOUND" in m
+
+
+def resync():
+    """Re-read the current mandate from the ledger. Returns the fresh cid."""
+    p = live_parties_setup()
+    cid, _ = L.recover(p["owner"], p["agent"])
+    LIVE["mandateCid"] = cid
+    return cid
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc)
 
@@ -225,6 +246,12 @@ def live_charge(amount, payee):
             "team1owner": p["owner"], "team1agent": p["agent"]}.get(payee, payee)
     ok, cid, why = L.charge(LIVE["mandateCid"], p["agent"], amount, full)
     LIVE["mandateCid"] = cid
+    if not ok and _stale(why):
+        # Someone else advanced the mandate. Pick up the successor and retry once.
+        fresh = resync()
+        if fresh:
+            ok, cid, why = L.charge(fresh, p["agent"], amount, full)
+            LIVE["mandateCid"] = cid
     if not ok:
         LIVE.setdefault("rejects", []).append({
             "seq": 0, "type": "charge", "status": "rejected",
@@ -254,6 +281,11 @@ def live_revoke():
         raise ValueError("no mandate on the ledger yet")
     ok, cid, why = L.revoke(LIVE["mandateCid"], p["owner"])
     LIVE["mandateCid"] = cid
+    if not ok and _stale(why):
+        fresh = resync()
+        if fresh:
+            ok, cid, why = L.revoke(fresh, p["owner"])
+            LIVE["mandateCid"] = cid
     if not ok:
         raise ValueError(why)
     return {"status": "ok"}
@@ -267,6 +299,11 @@ def live_revoke():
 def agent_run():
     """Let the agent work its own backlog against the live mandate."""
     p = live_parties_setup()
+    # Only fall back to the ledger if we are not already tracking a mandate.
+    # Resyncing unconditionally would discard the one just granted in favour of
+    # whichever older mandate recover() happens to rank highest.
+    if not LIVE["mandateCid"]:
+        resync()
     if not LIVE["mandateCid"]:
         raise ValueError("no mandate on the ledger yet — grant one first")
     cid, results = AG.run(LIVE["mandateCid"], p["agent"])
@@ -301,6 +338,11 @@ def settle_demo(amount=0.1):
 
     ok, cid, why = L.charge(LIVE["mandateCid"], p["agent"], amount, p["payee"])
     LIVE["mandateCid"] = cid
+    if not ok and _stale(why):
+        fresh = resync()
+        if fresh:
+            ok, cid, why = L.charge(fresh, p["agent"], amount, p["payee"])
+            LIVE["mandateCid"] = cid
     if not ok:
         raise ValueError(f"the ledger refused the charge: {why}")
 

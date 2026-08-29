@@ -44,26 +44,48 @@ From one autonomous agent run against the live ledger:
 ## Running it
 
 ```bash
-set -a && source .env && set +a
-python3 demo/server.py           # http://localhost:8000
+git pull
+./run.sh
 ```
 
-Then: **Grant mandate** → **Run the agent** → read the numbers → **Revoke** and
-charge again.
+Then open <http://localhost:8000> **on your own machine**.
 
-Daml rules and their tests, no node or network needed:
+Everyone runs their own copy. `localhost` means "this computer", so you cannot
+open a teammate's URL and you will not see their state — but you will all be
+talking to the same Canton DevNet ledger, so the mandate, the charges and the
+audit trail are shared. If one person grants a mandate, everyone else sees it.
+
+`run.sh` checks the credential, fetches a token, reads the ledger offset and
+tells you exactly what is wrong if any of that fails. It needs no `pip install`:
+the backend and `c8lab.py` are stdlib only.
+
+Port 8000 taken? `PORT=8001 ./run.sh`.
+
+If the page loads but says it cannot reach the ledger, that is usually DevNet
+rather than you: one of its load-balancer IPs blackholes traffic, so calls stall
+and retry. Press the button again.
+
+Balances, without the web UI:
 
 ```bash
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+set -a && source .env && set +a
+python3 demo/balance.py            # about a second
+python3 demo/balance.py --offers   # also lists transfers awaiting acceptance
+```
+
+The Daml rules and their tests, no node or network needed:
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17    # NOT 21; only 17 is installed
 export PATH="$HOME/.daml/bin:$JAVA_HOME/bin:$PATH"
 cd proj && daml build && daml test
 ```
 
-The autonomous agent on its own, without the web UI:
+The autonomous agent on its own:
 
 ```bash
 python3 demo/agent.py            # runs the backlog, prints the statement
-python3 demo/parties.py          # allocate parties, grant act-as rights
+python3 demo/parties.py          # allocate parties, grant act-as rights (slow)
 ```
 
 ## Try to break it
@@ -100,6 +122,22 @@ a single click authorises, transfers and lands the money:
 agent  4.0000 -> 3.9000   (-0.1)
 payee  1.0000 -> 1.1000   (+0.1)
 ```
+
+## The demo, in four clicks
+
+1. **Grant mandate** — the owner authorises the agent
+2. **Run the agent** — it works its backlog; three attempts are refused
+3. **Pay 0.1 for real** — Canton Coin actually moves, balances change
+4. **Revoke**, then charge again — refused
+
+**Return the coin** sweeps the payee's balance back to the agent, so the demo can
+be run repeatedly. Both parties are ours, so nothing is ever consumed beyond
+network fees.
+
+If a button reports `Contract could not be found`, someone else advanced the
+mandate — every charge archives it and creates a successor. The backend notices
+and re-reads the current one, so pressing the button again works. That is Canton
+being correct, not a bug.
 
 ## Honest limits
 
