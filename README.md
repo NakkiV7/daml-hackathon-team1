@@ -123,7 +123,10 @@ agent  4.0000 -> 3.9000   (-0.1)
 payee  1.0000 -> 1.1000   (+0.1)
 ```
 
-## The demo, in four clicks
+## The demo
+
+A step-by-step runbook covering exactly what the judges said they would try is in
+[DEMO.md](DEMO.md). Short version, four clicks:
 
 1. **Grant mandate** — the owner authorises the agent
 2. **Run the agent** — it works its backlog; three attempts are refused
