@@ -19,6 +19,7 @@ testAuditTrail = script do
       cap = 100.0
       spent = 0.0
       expiresAt = expiresAt
+      revoked = False
 
   chargeCid <- submit spender do
     exerciseCmd mandateCid Charge with
