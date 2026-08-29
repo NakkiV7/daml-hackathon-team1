@@ -2,7 +2,7 @@
 -- Everything here passes. Copy the shapes, do not copy the assertions blindly.
 module Test where
 
-import DA.Time (addRelTime, hours)
+import DA.Time (addRelTime, days, hours)
 import Daml.Script
 import Iou
 import Mandate
@@ -38,6 +38,7 @@ testMandate = script do
   prop <- submit alice do
     createCmd MandateProposal with
       owner = alice; spender = merchant; cap = 100.0; expiresAt = deadline
+      periodCap = 100.0; periodLength = days 30
   m <- submit merchant do exerciseCmd prop Accept
 
   -- Charging within the cap works, with no signature from Alice.

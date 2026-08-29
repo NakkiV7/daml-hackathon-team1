@@ -19,6 +19,10 @@ testAuditTrail = script do
       cap = 100.0
       spent = 0.0
       expiresAt = expiresAt
+      periodCap = 100.0
+      periodSpent = 0.0
+      periodStart = now
+      periodLength = days 30
 
   chargeCid <- submit spender do
     exerciseCmd mandateCid Charge with

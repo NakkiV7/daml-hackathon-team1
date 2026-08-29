@@ -1,0 +1,105 @@
+-- Per-period limits. Run with: daml test
+--
+-- The thing these tests prove: the window is anchored to periodStart and
+-- advances in WHOLE periods. It does not slide to "now" when a charge
+-- happens, so the spender cannot buy themselves a fresh window by timing
+-- their charges.
+module TestMandatePeriod where
+
+import DA.Date (Month(..), date)
+import DA.Time (addRelTime, days, time)
+import Daml.Script
+import Mandate
+
+-- 100 per 30-day period, 1000 lifetime.
+testPeriodCap : Script ()
+testPeriodCap = script do
+  alice <- allocateParty "Alice"
+  agent <- allocateParty "Agent"
+
+  let t0 = time (date 2026 Jan 1) 12 0 0
+      at d = time (date 2026 Jan 1) 12 0 0 `addDays` d
+  setTime t0
+
+  prop <- submit alice do
+    createCmd MandateProposal with
+      owner = alice; spender = agent
+      cap = 1000.0; expiresAt = at 365
+      periodCap = 100.0; periodLength = days 30
+  m <- submit agent do exerciseCmd prop Accept
+
+  -- Within the period cap: fine, no owner signature.
+  m <- submit agent do exerciseCmd m Charge with amount = 60.0
+
+  -- 60 + 50 would be 110 in this period. Lifetime cap has plenty of room;
+  -- the PERIOD cap is what rejects this, on the ledger.
+  submitMustFail agent do exerciseCmd m Charge with amount = 50.0
+
+  -- Exactly up to the period cap is allowed. <=, not <.
+  m <- submit agent do exerciseCmd m Charge with amount = 40.0
+
+  -- Period exhausted: even a tiny charge fails.
+  submitMustFail agent do exerciseCmd m Charge with amount = 0.01
+
+  -- One microsecond before the period boundary: still the old window.
+  setTime (time (date 2026 Jan 31) 11 59 59)
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+
+  -- At exactly t0 + 30 days the new window opens, full allowance again.
+  setTime (at 30)
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+
+  -- Quiet gap of several periods, then a charge on day 100. The window
+  -- must advance by WHOLE periods: 100 days is 3 whole periods, so the
+  -- current window started on day 90, not on day 100.
+  setTime (at 100)
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+
+  -- Day 119 is 29 days after the day-90 window start: same window, and the
+  -- window is full. If the implementation had anchored the window to the
+  -- last charge (day 100), this would still fail; the next assert is the
+  -- one that tells the two apart.
+  setTime (at 119)
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+
+  -- Day 120 = day 90 + one whole period: new window. An implementation
+  -- that re-anchored to the day-100 charge would wrongly reject this
+  -- until day 130.
+  setTime (at 120)
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+
+  -- The owner can still revoke instantly, mid-period.
+  submit alice do exerciseCmd m Revoke
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+  pure ()
+
+-- The lifetime cap still binds across periods: 150 total, 100 per period.
+testTotalCapAcrossPeriods : Script ()
+testTotalCapAcrossPeriods = script do
+  alice <- allocateParty "Alice2"
+  agent <- allocateParty "Agent2"
+
+  let t0 = time (date 2026 Jan 1) 12 0 0
+  setTime t0
+
+  prop <- submit alice do
+    createCmd MandateProposal with
+      owner = alice; spender = agent
+      cap = 150.0; expiresAt = time (date 2027 Jan 1) 12 0 0
+      periodCap = 100.0; periodLength = days 30
+  m <- submit agent do exerciseCmd prop Accept
+
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+
+  -- New period, fresh period allowance, but only 50 of lifetime cap left.
+  setTime (time (date 2026 Mar 1) 12 0 0)
+  submitMustFail agent do exerciseCmd m Charge with amount = 60.0
+  m <- submit agent do exerciseCmd m Charge with amount = 50.0
+
+  -- Lifetime cap exhausted; no amount of waiting brings it back.
+  setTime (time (date 2026 Dec 1) 12 0 0)
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+  pure ()
+
+addDays : Time -> Int -> Time
+addDays t n = addRelTime t (days n)
