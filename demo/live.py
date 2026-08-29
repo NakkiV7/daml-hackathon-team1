@@ -45,6 +45,92 @@ def party(hint):
     return f"{hint}::{NAMESPACE}"
 
 
+# ---------------------------------------------------------------------------
+# DevNet reliability.
+#
+# api.validator.dev.digik.cantor8.tech resolves to several load-balancer IPs and
+# at least one of them blackholes traffic: a plain `curl` stalls for 30-75s on
+# TCP connect roughly one attempt in five, then a retry to a different IP
+# succeeds immediately. c8lab uses a single 30s timeout with no retry, so a demo
+# can appear to hang for a minute at random.
+#
+# Wrapping c8lab's one HTTP chokepoint with a short timeout and a couple of
+# retries turns a 75s freeze into a sub-second hiccup. Nothing here changes what
+# is sent; it only gives up on a stalled socket sooner and tries again.
+# ---------------------------------------------------------------------------
+# A healthy connect takes ~0.02s, so 3s is already very generous; the only
+# thing a longer wait buys is a longer freeze on a blackholed IP.
+CONNECT_TIMEOUT = float(os.environ.get("C8_TIMEOUT", "3"))
+RETRIES = int(os.environ.get("C8_RETRIES", "5"))
+
+_raw_request = c8lab._request
+
+
+def _retrying_request(url, body=None, headers=None, method=None, timeout=None):
+    # Never retry a command submission. A submit that stalls client-side may
+    # already have committed on the ledger, so resending it either duplicates the
+    # effect or -- because c8lab reuses the commandId within one call -- comes
+    # back as DUPLICATE_COMMAND and destroys an otherwise successful charge.
+    # Reads are idempotent and safe to repeat.
+    writing = "/v2/commands/" in url
+    attempts = 1 if writing else RETRIES
+    # Submissions legitimately take longer than a read, so give them the full
+    # timeout rather than the short one tuned for spotting a dead IP.
+    per_try = 30.0 if writing else CONNECT_TIMEOUT
+    last = None
+    for attempt in range(attempts):
+        try:
+            return _raw_request(url, body, headers, method, timeout=per_try)
+        except c8lab.LabError as e:
+            msg = str(e)
+            retryable = ("timed out" in msg or "timeout" in msg.lower()
+                         or "cannot reach" in msg or "network error" in msg
+                         or "HTTP 503" in msg or "HTTP 502" in msg)
+            last = e
+            if not retryable or attempt == attempts - 1:
+                raise
+    raise last
+
+
+c8lab._request = _retrying_request
+
+
+# token() does not go through _request: it calls urllib directly with a
+# hardcoded 30s timeout and no retry. The Keycloak host has the same flaky-IP
+# problem, and since the token is fetched once per process a single stall there
+# delays everything after it. Re-fetch it ourselves with a short timeout, and
+# fall back to c8lab for the LocalNet (self-signed HS256) path.
+_raw_token = c8lab.token
+
+
+def _retrying_token(sub=None):
+    if not c8lab.IDP:
+        return _raw_token() if sub is None else _raw_token(sub)
+    if "t" in c8lab._tok:
+        return c8lab._tok["t"]
+    if not c8lab.CSEC:
+        raise c8lab.LabError("C8_IDP is set but C8_CLIENT_SECRET is not.")
+    import json as _json, urllib.parse as _up, urllib.request as _ur
+    data = _up.urlencode({"grant_type": "client_credentials",
+                          "client_id": c8lab.CID,
+                          "client_secret": c8lab.CSEC}).encode()
+    url = f"{c8lab.IDP}/realms/master/protocol/openid-connect/token"
+    last = None
+    for attempt in range(RETRIES):
+        try:
+            raw = _ur.urlopen(_ur.Request(url, data=data),
+                              timeout=CONNECT_TIMEOUT).read()
+            c8lab._tok["t"] = _json.loads(raw)["access_token"]
+            return c8lab._tok["t"]
+        except Exception as e:
+            last = e
+    raise c8lab.LabError(f"could not get a token from {c8lab.IDP} "
+                         f"after {RETRIES} attempts: {last}")
+
+
+c8lab.token = _retrying_token
+
+
 def _created(res, want):
     """Contract id of the first created event whose templateId contains `want`."""
     for e in res.get("transaction", {}).get("events", []):
@@ -190,13 +276,24 @@ def recover(owner, spender=None):
 # charge never reaches this code at all.
 # ---------------------------------------------------------------------------
 def balance(p, instrument="Amulet"):
-    """Spendable holdings for a party. Locked holdings do not count."""
-    try:
-        hs = c8lab.holdings(p)
-    except c8lab.LabError:
-        return 0.0
+    """Spendable holdings for a party. Locked holdings do not count.
+
+    Raises on failure rather than returning zero. DevNet intermittently takes
+    longer than c8lab's 30s timeout, and a timeout reported as a 0.00 balance
+    looks exactly like the money having gone -- which is the worst possible thing
+    to show during a demo. Callers must handle the error and say "unknown".
+    """
+    hs = c8lab.holdings(p)
     return sum(float(h["amount"] or 0) for h in hs
                if not h["locked"] and h["instrument"] == instrument)
+
+
+def balance_or_none(p, instrument="Amulet"):
+    """Balance, or None if the ledger could not be reached. Never lies with 0."""
+    try:
+        return balance(p, instrument)
+    except c8lab.LabError:
+        return None
 
 
 def settlement_ready(sender, receiver):
@@ -210,11 +307,13 @@ def settlement_ready(sender, receiver):
         out["instrument"] = "Amulet" if "Amulet" in names else (names[0] if names else None)
     except Exception as e:
         out["blockedBy"].append(f"registry unreachable: {str(e).splitlines()[0][:80]}")
-    out["senderBalance"] = balance(sender)
-    out["receiverBalance"] = balance(receiver)
-    if out["senderBalance"] <= 0:
+    sb, rb = balance_or_none(sender), balance_or_none(receiver)
+    out["senderBalance"], out["receiverBalance"] = sb, rb
+    if sb is None:
+        out["blockedBy"].append("could not read the sender's balance (ledger timed out)")
+    elif sb <= 0:
         out["blockedBy"].append("sender holds no Canton Coin — ask the Cantor8 team to fund it")
-    out["ready"] = out["registry"] and out["senderBalance"] > 0
+    out["ready"] = bool(out["registry"] and sb is not None and sb > 0)
     return out
 
 
