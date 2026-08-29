@@ -21,6 +21,7 @@ testAuditTrail = script do
       spent = 0.0
       counterparties = [merchant]
       expiresAt = expiresAt
+      revoked = False
 
   chargeCid <- submit spender do
     exerciseCmd mandateCid Charge with
