@@ -54,8 +54,8 @@ testMandate = script do
   submitMustFail alice do exerciseCmd m Charge with amount = 1.0; payee = supplier
 
   -- Raising the cap needs both signatures, so the merchant cannot do it alone.
-  submitMustFail merchant do exerciseCmd m Adjust with newCap = 500.0
-  m <- submitMulti [alice, merchant] [] do exerciseCmd m Adjust with newCap = 200.0
+  submitMustFail merchant do exerciseCmd m Adjust with newCap = 500.0; newCounterparties = [supplier]
+  m <- submitMulti [alice, merchant] [] do exerciseCmd m Adjust with newCap = 200.0; newCounterparties = [supplier]
 
   -- Alice revokes. Instantly, and the merchant cannot stop her.
   submit alice do exerciseCmd m Revoke

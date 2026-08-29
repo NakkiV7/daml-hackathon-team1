@@ -1,4 +1,4 @@
-module TestMandateAudit where
+module MandateAuditTest where
 
 import Daml.Script
 import DA.Time
@@ -21,6 +21,10 @@ testAuditTrail = script do
       spent = 0.0
       counterparties = [merchant]
       expiresAt = expiresAt
+      periodCap = 100.0
+      periodSpent = 0.0
+      periodStart = now
+      periodLength = days 30
       revoked = False
 
   chargeCid <- submit spender do
