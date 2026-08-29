@@ -40,7 +40,17 @@
     padding:56px 72px 84px; position:relative;
   }
   .slide.on { display:block; }
-  @media print { .slide { display:block; page-break-after:always; min-height:0; } }
+  @media print {
+    /* Every slide must be visible: on screen only the active one is displayed,
+       so without this Chromium would print a single page. */
+    .slide { display:block; page-break-after:always; min-height:0; height:810px;
+             padding:56px 72px; overflow:hidden; }
+    /* No trailing blank page. */
+    .slide:last-of-type { page-break-after:auto; }
+    /* The navigation rail is fixed, so it would otherwise repeat over the
+       content of every printed page. */
+    .rail { display:none; }
+  }
 
   .rail {
     position:fixed; left:0; right:0; bottom:0; height:44px; z-index:10;
@@ -116,6 +126,14 @@
   pre {
     margin:0; padding:15px 17px; background:var(--black); color:#eee;
     font:400 14px/1.65 var(--mono); overflow-x:auto;
+  }
+  /* Must come after any `font:` shorthand: the shorthand resets font-variant,
+     so declaring this earlier has no effect. Fragment Mono ligates <= into a
+     single ≤ glyph, and Daml is written with <=, so the ligature would
+     misquote the source this document exists to quote. */
+  pre, code, .mono, .num {
+    font-variant-ligatures:none;
+    font-feature-settings:"liga" 0, "clig" 0, "calt" 0;
   }
   pre .hl { color:#8fc7ff; }
   pre .cm { color:#8f8f8f; }

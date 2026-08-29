@@ -24,3 +24,5 @@ proj/log/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Rendered deck (regenerate with tools/slides_to_pdf.py)
