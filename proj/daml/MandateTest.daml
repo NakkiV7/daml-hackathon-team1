@@ -5,32 +5,104 @@ import Daml.Script
 import Mandate
 
 
--- Proves revocation is enforced by the ledger rather than by an API:
---   * the agent can charge while the mandate is active;
---   * the agent cannot revoke (or otherwise interfere with revocation);
---   * the owner revokes without the agent's authorization; and
---   * the agent cannot charge the replacement mandate marked as revoked.
-revocationTest : Script ()
-revocationTest = script do
+-- `submitMustFail` accepts any ledger rejection. For the key policy checks we
+-- inspect the returned exception so an unrelated failure cannot create a false
+-- positive.
+assertAssertionMessage : Text -> SubmitError -> Script ()
+assertAssertionMessage expected submitError = script do
+  case submitError of
+    FailureStatusError status -> assert (status.message == expected)
+    _ -> assert False
+
+
+-- A small test fixture: every test gets a fresh mandate with a 100 lifetime
+-- cap. The period cap is deliberately much higher so it cannot be the reason
+-- an over-total-cap charge fails.
+createTestMandate
+  : Party
+  -> Party
+  -> Party
+  -> Time
+  -> Decimal
+  -> Script (ContractId Mandate)
+createTestMandate owner agent merchant now totalCap = script do
+  proposalCid <- submit owner do
+    createCmd MandateProposal with
+      owner
+      spender = agent
+      cap = totalCap
+      counterparties = [merchant]
+      expiresAt = addRelTime now (days 1)
+      periodCap = 1000.0
+      periodLength = days 30
+
+  submit agent do
+    exerciseCmd proposalCid Accept
+
+
+-- Positive test: a valid charge commits and creates the expected successor
+-- state. Querying the returned ContractId proves the state transition happened.
+chargeUnderCapSucceeds : Script ()
+chargeUnderCapSucceeds = script do
   owner <- allocateParty "Owner"
   agent <- allocateParty "Agent"
   merchant <- allocateParty "Merchant"
   now <- getTime
 
-  proposalCid <- submit owner do
-    createCmd MandateProposal with
-      owner
-      spender = agent
-      cap = 100.0
-      counterparties = [merchant]
-      expiresAt = addRelTime now (days 1)
-      periodCap = 100.0
-      periodLength = days 30
+  mandateCid <- createTestMandate owner agent merchant now 100.0
+  chargedMandateCid <- submit agent do
+    exerciseCmd mandateCid Charge with amount = 60.0; payee = merchant
 
+  Some chargedMandate <- queryContractId owner chargedMandateCid
+  assert (chargedMandate.spent == 60.0)
+  assert (chargedMandate.periodSpent == 60.0)
+
+  chargeAudits <- query @MandateChargeAudit owner
+  assert (length chargeAudits == 1)
+
+
+-- Negative test: the cap is cumulative, not merely a per-charge maximum.
+-- Every other rule is satisfied, isolating the lifetime-cap assertion.
+cumulativeChargeOverCapFails : Script ()
+cumulativeChargeOverCapFails = script do
+  owner <- allocateParty "Owner"
+  agent <- allocateParty "Agent"
+  merchant <- allocateParty "Merchant"
+  now <- getTime
+
+  mandateCid <- createTestMandate owner agent merchant now 100.0
   mandateCid <- submit agent do
-    exerciseCmd proposalCid Accept
+    exerciseCmd mandateCid Charge with amount = 40.0; payee = merchant
+  activeMandateCid <- submit agent do
+    exerciseCmd mandateCid Charge with amount = 40.0; payee = merchant
 
-  -- Establish that this contract id really is usable by the agent.
+  -- 40 + 40 + 21 is over the lifetime cap of 100, while it remains below the
+  -- period cap of 1000. The ledger must reject the entire transaction.
+  capError <- submitWithError agent do
+    exerciseCmd activeMandateCid Charge with amount = 21.0; payee = merchant
+  assertAssertionMessage "charge would exceed the cap" capError
+
+  -- A failed Daml transaction is atomic: the mandate remains active at 80 and
+  -- no third audit entry was created.
+  Some unchangedMandate <- queryContractId owner activeMandateCid
+  assert (unchangedMandate.spent == 80.0)
+  assert (unchangedMandate.periodSpent == 80.0)
+
+  chargeAudits <- query @MandateChargeAudit owner
+  assert (length chargeAudits == 2)
+
+
+-- Revocation test: use the successor ContractId returned by Revoke. Trying the
+-- old id would only prove that consuming choices archive their input; trying
+-- this new id specifically exercises the `not revoked` guard in Mandate.Charge.
+chargeAfterRevocationFails : Script ()
+chargeAfterRevocationFails = script do
+  owner <- allocateParty "Owner"
+  agent <- allocateParty "Agent"
+  merchant <- allocateParty "Merchant"
+  now <- getTime
+
+  mandateCid <- createTestMandate owner agent merchant now 100.0
   activeMandateCid <- submit agent do
     exerciseCmd mandateCid Charge with amount = 10.0; payee = merchant
 
@@ -38,12 +110,143 @@ revocationTest = script do
   submitMustFail agent do
     exerciseCmd activeMandateCid Revoke
 
-  -- No agent authorization is present in this submission. Revoke consumes the
-  -- active contract and returns its replacement with revoked = True.
   revokedMandateCid <- submit owner do
     exerciseCmd activeMandateCid Revoke
 
-  -- Exercise the NEW contract id so this proves the Daml `not revoked` guard,
-  -- rather than merely proving that the previous contract id was consumed.
+  Some revokedMandate <- queryContractId owner revokedMandateCid
+  assert revokedMandate.revoked
+
+  -- The predecessor must have been consumed. This catches an accidental change
+  -- from a consuming choice to `nonconsuming choice Revoke`.
   submitMustFail agent do
+    exerciseCmd activeMandateCid Charge with amount = 1.0; payee = merchant
+
+  -- The live successor must also reject charges because revoked = True.
+  revokedError <- submitWithError agent do
     exerciseCmd revokedMandateCid Charge with amount = 1.0; payee = merchant
+  assertAssertionMessage "mandate revoked" revokedError
+
+  -- The failed charge cannot mutate the revoked mandate or create an audit.
+  Some unchangedMandate <- queryContractId owner revokedMandateCid
+  assert
+    (unchangedMandate.revoked
+      && unchangedMandate.spent == 10.0
+      && unchangedMandate.periodSpent == 10.0)
+
+  -- Even a jointly authorized policy adjustment must preserve revocation.
+  adjustedRevokedCid <- submit [owner, agent] do
+    exerciseCmd revokedMandateCid Adjust with
+      newCap = 1000000.0
+      newCounterparties = [merchant]
+  Some adjustedRevokedMandate <- queryContractId owner adjustedRevokedCid
+  assert adjustedRevokedMandate.revoked
+
+  adjustedRevokedError <- submitWithError agent do
+    exerciseCmd adjustedRevokedCid Charge with amount = 1.0; payee = merchant
+  assertAssertionMessage "mandate revoked" adjustedRevokedError
+
+  chargeAudits <- query @MandateChargeAudit owner
+  revokeAudits <- query @MandateRevokeAudit owner
+  assert (length chargeAudits == 1)
+  assert (length revokeAudits == 1)
+
+
+-- Boundary and input attacks a judge is likely to try. Exactly the cap is
+-- valid, but replaying the consumed input, going one cent over, or using zero
+-- or negative amounts must all fail without changing the current state.
+capBoundaryAndReplayAttacksFail : Script ()
+capBoundaryAndReplayAttacksFail = script do
+  owner <- allocateParty "Owner"
+  agent <- allocateParty "Agent"
+  merchant <- allocateParty "Merchant"
+  now <- getTime
+
+  originalMandateCid <- createTestMandate owner agent merchant now 100.0
+  atCapMandateCid <- submit agent do
+    exerciseCmd originalMandateCid Charge with amount = 100.0; payee = merchant
+
+  -- Charge is consuming, so an attacker cannot replay the old contract id.
+  submitMustFail agent do
+    exerciseCmd originalMandateCid Charge with amount = 1.0; payee = merchant
+
+  overCapError <- submitWithError agent do
+    exerciseCmd atCapMandateCid Charge with amount = 0.01; payee = merchant
+  assertAssertionMessage "charge would exceed the cap" overCapError
+
+  -- These amounts would not exceed the cap; they must fail specifically at
+  -- the positive-amount guard.
+  zeroError <- submitWithError agent do
+    exerciseCmd atCapMandateCid Charge with amount = 0.0; payee = merchant
+  assertAssertionMessage "amount must be positive" zeroError
+
+  negativeError <- submitWithError agent do
+    exerciseCmd atCapMandateCid Charge with amount = -1.0; payee = merchant
+  assertAssertionMessage "amount must be positive" negativeError
+
+  Some unchangedMandate <- queryContractId owner atCapMandateCid
+  assert (unchangedMandate.spent == 100.0)
+  assert (unchangedMandate.periodSpent == 100.0)
+
+  chargeAudits <- query @MandateChargeAudit owner
+  assert (length chargeAudits == 1)
+
+
+-- A non-round cap catches implementations or APIs that accidentally hard-code
+-- the demo's usual 100 limit. Decimal arithmetic must also honor the boundary.
+irregularDecimalCapIsEnforced : Script ()
+irregularDecimalCapIsEnforced = script do
+  owner <- allocateParty "Owner"
+  agent <- allocateParty "Agent"
+  merchant <- allocateParty "Merchant"
+  now <- getTime
+
+  mandateCid <- createTestMandate owner agent merchant now 37.25
+  mandateCid <- submit agent do
+    exerciseCmd mandateCid Charge with amount = 12.10; payee = merchant
+  atCapMandateCid <- submit agent do
+    exerciseCmd mandateCid Charge with amount = 25.15; payee = merchant
+
+  Some atCapMandate <- queryContractId owner atCapMandateCid
+  assert (atCapMandate.spent == 37.25)
+
+  capError <- submitWithError agent do
+    exerciseCmd atCapMandateCid Charge with amount = 0.01; payee = merchant
+  assertAssertionMessage "charge would exceed the cap" capError
+
+  chargeAudits <- query @MandateChargeAudit owner
+  assert (length chargeAudits == 2)
+
+
+-- Privilege-escalation attacks: the agent cannot raise its own cap through
+-- Adjust and cannot mint a replacement mandate claiming the owner as signatory.
+agentCannotEscalateCap : Script ()
+agentCannotEscalateCap = script do
+  owner <- allocateParty "Owner"
+  agent <- allocateParty "Agent"
+  merchant <- allocateParty "Merchant"
+  now <- getTime
+
+  mandateCid <- createTestMandate owner agent merchant now 100.0
+
+  submitMustFail agent do
+    exerciseCmd mandateCid Adjust with
+      newCap = 1000000.0
+      newCounterparties = [merchant]
+
+  submitMustFail agent do
+    createCmd Mandate with
+      owner
+      spender = agent
+      cap = 1000000.0
+      spent = 0.0
+      counterparties = [merchant]
+      expiresAt = addRelTime now (days 1)
+      periodCap = 1000000.0
+      periodSpent = 0.0
+      periodStart = now
+      periodLength = days 30
+      revoked = False
+
+  Some unchangedMandate <- queryContractId owner mandateCid
+  assert (unchangedMandate.cap == 100.0)
+  assert (unchangedMandate.spent == 0.0)
