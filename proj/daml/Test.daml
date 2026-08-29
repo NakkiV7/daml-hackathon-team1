@@ -58,8 +58,9 @@ testMandate = script do
   m <- submitMulti [alice, merchant] [] do exerciseCmd m Adjust with newCap = 200.0; newCounterparties = [supplier]
 
   -- Alice revokes. Instantly, and the merchant cannot stop her.
-  submit alice do exerciseCmd m Revoke
+  m <- submit alice do exerciseCmd m Revoke
 
-  -- The mandate is gone, so nothing more can be charged.
+  -- Revoke returned the replacement mandate marked revoked, and the on-ledger
+  -- guard prevents the merchant from charging that current contract.
   submitMustFail merchant do exerciseCmd m Charge with amount = 1.0; payee = supplier
   pure ()
