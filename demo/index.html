@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D1 Agent Wallet — demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0;
+         background: #0f1115; color: #e6e6e6; }
+  header { padding: 16px 24px; background: #171a21; border-bottom: 1px solid #2a2f3a; }
+  header h1 { margin: 0; font-size: 18px; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { background: #171a21; border: 1px solid #2a2f3a; border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; text-transform: uppercase;
+             letter-spacing: .05em; color: #8b93a7; }
+  label { display: block; font-size: 12px; color: #8b93a7; margin: 8px 0 2px; }
+  input { width: 100%; padding: 8px; background: #0f1115; border: 1px solid #2a2f3a;
+          border-radius: 6px; color: #e6e6e6; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; cursor: pointer;
+           font-weight: 600; margin-top: 10px; }
+  .primary { background: #3b82f6; color: #fff; }
+  .danger  { background: #ef4444; color: #fff; }
+  .ghost   { background: #2a2f3a; color: #e6e6e6; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  .row > div { flex: 1; min-width: 120px; }
+  .bar { height: 22px; background: #0f1115; border: 1px solid #2a2f3a;
+         border-radius: 6px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: #22c55e; transition: width .3s, background .3s; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+          font-size: 12px; background: #2a2f3a; margin: 2px 4px 2px 0; }
+  .ok { color: #22c55e; } .bad { color: #ef4444; }
+  #log { max-height: 320px; overflow: auto; font-family: ui-monospace, monospace;
+         font-size: 12px; }
+  .entry { padding: 6px 8px; border-bottom: 1px solid #2a2f3a; }
+  .muted { color: #8b93a7; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+           padding: 10px 16px; border-radius: 8px; display: none; max-width: 80%; }
+</style>
+</head>
+<body>
+<header><h1>D1 · Spend-limited wallet for an AI agent</h1></header>
+<div class="wrap">
+
+  <div class="card">
+    <h2>Network connection</h2>
+    <div class="row">
+      <button class="ghost" onclick="checkLedger()">Check ledger (live)</button>
+      <button class="ghost" onclick="loadParties()">List parties (live)</button>
+    </div>
+    <div id="conn" class="muted" style="margin-top:10px">not checked yet</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>1 · Owner creates mandate</h2>
+      <label>Spend cap</label>
+      <input id="cap" type="number" value="100">
+      <label>Allowed counterparties (comma separated)</label>
+      <input id="cps" value="Merchant, Cloud">
+      <label>Expires in (hours)</label>
+      <input id="hours" type="number" value="24">
+      <button class="primary" onclick="createMandate()">Create mandate</button>
+    </div>
+
+    <div class="card">
+      <h2>2 · Agent charges</h2>
+      <label>Amount</label>
+      <input id="amount" type="number" value="25">
+      <label>Payee</label>
+      <input id="payee" value="Merchant">
+      <button class="primary" onclick="doCharge()">Charge</button>
+      <button class="danger" onclick="doRevoke()">Owner revoke</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Mandate state</h2>
+    <div id="state" class="muted">no mandate yet</div>
+    <div class="bar"><div id="capbar" style="width:0%"></div></div>
+    <div id="cpills" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Audit log (every action + rule that allowed it)</h2>
+    <div id="log"><div class="muted">nothing yet</div></div>
+  </div>
+
+</div>
+<div id="toast"></div>
+
+<script>
+const API = "";  // same origin (backend serves this file)
+
+function toast(msg, ok) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.style.background = ok ? "#14532d" : "#7f1d1d";
+  t.style.color = "#fff";
+  t.style.display = "block";
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.style.display = "none", 3500);
+}
+
+async function api(path, method, body) {
+  const r = await fetch(API + path, {
+    method: method || "GET",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+  return data;
+}
+
+async function checkLedger() {
+  const c = document.getElementById("conn");
+  c.textContent = "checking...";
+  try {
+    const d = await api("/api/ledger");
+    c.innerHTML = `<span class="ok">connected</span> · ${d.mode} · token ${d.token} · ledger end <b>${d.ledgerEnd}</b>`;
+  } catch (e) {
+    c.innerHTML = `<span class="bad">failed</span> · ${e.message}`;
+  }
+}
+
+async function loadParties() {
+  const c = document.getElementById("conn");
+  try {
+    const d = await api("/api/parties");
+    c.innerHTML = `<span class="ok">${d.count} parties on the node</span> (showing ${d.parties.length})`;
+  } catch (e) {
+    c.innerHTML = `<span class="bad">failed</span> · ${e.message}`;
+  }
+}
+
+async function createMandate() {
+  const cps = document.getElementById("cps").value.split(",").map(s => s.trim()).filter(Boolean);
+  try {
+    await api("/api/mandate", "POST", {
+      cap: parseFloat(document.getElementById("cap").value),
+      counterparties: cps,
+      hours: parseFloat(document.getElementById("hours").value),
+    });
+    toast("mandate created", true);
+    refresh();
+  } catch (e) { toast(e.message, false); }
+}
+
+async function doCharge() {
+  try {
+    const d = await api("/api/charge", "POST", {
+      amount: parseFloat(document.getElementById("amount").value),
+      payee: document.getElementById("payee").value.trim(),
+    });
+    toast(`charged ${d.amount} to ${d.payee}`, true);
+    refresh();
+  } catch (e) { toast("REJECTED · " + e.message, false); refresh(); }
+}
+
+async function doRevoke() {
+  try {
+    await api("/api/revoke", "POST", {});
+    toast("mandate revoked", true);
+    refresh();
+  } catch (e) { toast(e.message, false); }
+}
+
+function renderLog(audit) {
+  const el = document.getElementById("log");
+  if (!audit || !audit.length) { el.innerHTML = '<div class="muted">nothing yet</div>'; return; }
+  el.innerHTML = audit.slice().reverse().map(e => {
+    if (e.type === "created") return `<div class="entry"><b>created</b> cap ${e.cap}, allow [${e.counterparties.join(", ")}] <span class="muted">${e.at}</span></div>`;
+    if (e.type === "charge")  return `<div class="entry"><span class="ok">charge</span> ${e.amount} → ${e.payee}, spent ${e.newSpent} <span class="muted">[${e.rule}]</span></div>`;
+    if (e.type === "revoke")  return `<div class="entry"><span class="bad">revoke</span> ${e.reason} <span class="muted">${e.at}</span></div>`;
+    return `<div class="entry">${JSON.stringify(e)}</div>`;
+  }).join("");
+}
+
+async function refresh() {
+  const d = await api("/api/state");
+  const s = document.getElementById("state");
+  const bar = document.getElementById("capbar");
+  const pills = document.getElementById("cpills");
+  if (!d.mandate) { s.textContent = "no mandate yet"; bar.style.width = "0%"; pills.innerHTML = ""; renderLog(d.audit); return; }
+  const m = d.mandate;
+  const pct = Math.min(100, (m.spent / m.cap) * 100);
+  s.innerHTML = `owner <b>${m.owner}</b> · spender <b>${m.spender}</b> · spent <b>${m.spent}</b> / ${m.cap}` +
+                (d.revoked ? ' · <span class="bad">REVOKED</span>' : "");
+  bar.style.width = pct + "%";
+  bar.style.background = pct >= 100 ? "#ef4444" : (pct > 80 ? "#f59e0b" : "#22c55e");
+  pills.innerHTML = "allow-list: " + m.counterparties.map(c => `<span class="pill">${c}</span>`).join("");
+  renderLog(d.audit);
+}
+
+refresh();
+</script>
+</body>
+</html>
