@@ -23,6 +23,8 @@ template Mandate
     spent          : Decimal    -- how much so far
     expiresAt      : Time
     counterparties : [Party]    -- allow-list: spender may only pay these parties
+    expiresAt : Time
+    revoked  : Bool       -- true once the owner revokes the mandate
   where
     ensure cap > 0.0 && spent >= 0.0 && spent <= cap
 
@@ -35,22 +37,45 @@ template Mandate
     choice Charge : ContractId Mandate
       with
         counterparty : Party
-        amount       : Decimal
+        amount : Decimal
+        payee  : Party        -- who the spender wants to pay
       controller spender
       do
         now <- getTime
         -- Deadlines are NOT enforced for you. Check them yourself.
         assertMsg "mandate expired" (now < expiresAt)
         assertMsg "amount must be positive" (amount > 0.0)
+        assertMsg "mandate revoked" (not revoked)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
+        
+        -- Allow-list: the spender may only pay approved counterparties.
         assertMsg "counterparty is not on the allow-list"
-          (counterparty `elem` counterparties)
-        create this with spent = spent + amount
+        (counterparty `elem` counterparties)
+        newMandateCid <- create this with spent = spent + amount
+        create MandateChargeAudit with
+          owner
+          spender
+          payee
+          amount
+          newSpent = spent + amount
+          at = now
+          rule = "total-cap + allow-list check"
+        pure newMandateCid
 
     -- The owner can always stop it, and the spender cannot block that.
-    choice Revoke : ()
+    -- Keep the mandate alive so the ledger can show a clear revoked state and
+    -- connect the revocation event directly to the mandate's current record.
+    choice Revoke : ContractId Mandate
       controller owner
-      do pure ()
+      do
+        now <- getTime
+        newMandateCid <- create this with revoked = True
+        create MandateRevokeAudit with
+          owner
+          spender
+          at = now
+          reason = "owner revocation"
+        pure newMandateCid
 
     -- Raising the cap or changing who the agent may pay needs both
     -- parties, because both are signatories.
@@ -62,6 +87,31 @@ template Mandate
       do
         assertMsg "new cap below what is already spent" (newCap >= spent)
         create this with cap = newCap, counterparties = newCounterparties
+
+
+template MandateChargeAudit
+  with
+    owner    : Party
+    spender  : Party
+    payee    : Party
+    amount   : Decimal
+    newSpent : Decimal
+    at       : Time
+    rule     : Text
+  where
+    signatory spender
+    observer owner
+
+
+template MandateRevokeAudit
+  with
+    owner  : Party
+    spender: Party
+    at     : Time
+    reason : Text
+  where
+    signatory owner
+    observer spender
 
 
 -- Propose and accept: the most common shape in Daml.
