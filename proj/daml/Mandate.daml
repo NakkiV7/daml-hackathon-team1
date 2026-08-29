@@ -39,12 +39,27 @@ template Mandate
         assertMsg "mandate expired" (now < expiresAt)
         assertMsg "amount must be positive" (amount > 0.0)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
-        create this with spent = spent + amount
+        newMandateCid <- create this with spent = spent + amount
+        create MandateChargeAudit with
+          owner
+          spender
+          amount
+          newSpent = spent + amount
+          at = now
+          rule = "total-cap check"
+        pure newMandateCid
 
     -- The owner can always stop it, and the spender cannot block that.
     choice Revoke : ()
       controller owner
-      do pure ()
+      do
+        now <- getTime
+        create MandateRevokeAudit with
+          owner
+          spender
+          at = now
+          reason = "owner revocation"
+        pure ()
 
     -- Raising the cap needs both parties, because both are signatories.
     choice Adjust : ContractId Mandate
@@ -53,6 +68,30 @@ template Mandate
       do
         assertMsg "new cap below what is already spent" (newCap >= spent)
         create this with cap = newCap
+
+
+template MandateChargeAudit
+  with
+    owner    : Party
+    spender  : Party
+    amount   : Decimal
+    newSpent : Decimal
+    at       : Time
+    rule     : Text
+  where
+    signatory spender
+    observer owner
+
+
+template MandateRevokeAudit
+  with
+    owner  : Party
+    spender: Party
+    at     : Time
+    reason : Text
+  where
+    signatory owner
+    observer spender
 
 
 -- Propose and accept: the most common shape in Daml.
