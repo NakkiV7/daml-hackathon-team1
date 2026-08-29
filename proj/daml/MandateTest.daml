@@ -9,7 +9,7 @@ import Mandate
 --   * the agent can charge while the mandate is active;
 --   * the agent cannot revoke (or otherwise interfere with revocation);
 --   * the owner revokes without the agent's authorization; and
---   * the agent cannot charge the archived mandate afterwards.
+--   * the agent cannot charge the replacement mandate marked as revoked.
 revocationTest : Script ()
 revocationTest = script do
   owner <- allocateParty "Owner"
@@ -38,12 +38,12 @@ revocationTest = script do
   submitMustFail agent do
     exerciseCmd activeMandateCid Revoke
 
-  -- No agent authorization is present in this submission. Revoke still
-  -- succeeds and consumes the active mandate contract on the ledger.
-  submit owner do
+  -- No agent authorization is present in this submission. Revoke consumes the
+  -- active contract and returns its replacement with revoked = True.
+  revokedMandateCid <- submit owner do
     exerciseCmd activeMandateCid Revoke
 
-  -- Even if the agent retained the contract id, the ledger rejects the charge
-  -- because Revoke archived that contract.
+  -- Exercise the NEW contract id so this proves the Daml `not revoked` guard,
+  -- rather than merely proving that the previous contract id was consumed.
   submitMustFail agent do
-    exerciseCmd activeMandateCid Charge with amount = 1.0; payee = merchant
+    exerciseCmd revokedMandateCid Charge with amount = 1.0; payee = merchant
