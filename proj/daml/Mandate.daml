@@ -42,6 +42,8 @@ template Mandate
         create this with spent = spent + amount
 
     -- The owner can always stop it, and the spender cannot block that.
+    -- Choices are consuming by default, so a successful Revoke archives this
+    -- mandate on the ledger. Any later Charge against its contract id fails.
     choice Revoke : ()
       controller owner
       do pure ()
