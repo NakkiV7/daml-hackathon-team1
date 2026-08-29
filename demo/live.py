@@ -144,3 +144,32 @@ def audit(reader):
                 a["_kind"] = kind
                 out.append(a)
     return sorted(out, key=lambda x: x.get("at") or "")
+
+
+def recover(owner, spender=None):
+    """Find an active Mandate on the ledger for these parties.
+
+    The backend holds the current contract id in memory, so a restart would
+    otherwise 'lose' a mandate that is still perfectly alive on Canton. This
+    reads it back out of the active contract set instead, which is the whole
+    argument for keeping state on a ledger. Returns (cid, args) or (None, None).
+    Prefers the un-revoked one with the most spent, i.e. the latest in the chain.
+    """
+    body = {"filter": {"filtersByParty": {owner: {"cumulative": [
+                {"identifierFilter": {"TemplateFilter": {"value": {
+                    "templateId": R_MANDATE, "includeCreatedEventBlob": False}}}}]}}},
+            "verbose": False, "activeAtOffset": c8lab.ledger_end()}
+    best = (None, None)
+    best_key = None
+    for item in c8lab.call("/v2/state/active-contracts", body):
+        ev = item.get("contractEntry", {}).get("JsActiveContract", {}).get("createdEvent", {})
+        a = ev.get("createArgument") or {}
+        if not a or a.get("owner") != owner:
+            continue
+        if spender and a.get("spender") != spender:
+            continue
+        # An active, un-revoked mandate beats a revoked one; then most spent wins.
+        key = (0 if a.get("revoked") else 1, float(a.get("spent") or 0))
+        if best_key is None or key > best_key:
+            best_key, best = key, (ev.get("contractId"), a)
+    return best

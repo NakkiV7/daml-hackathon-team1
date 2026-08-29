@@ -411,6 +411,29 @@
       .hero, .actions { grid-template-columns: 1fr; }
       .topbar { align-items: flex-start; flex-direction: column; }
     }
+
+    /* --- scoreboard, agent run, statement, honesty --- */
+    .score { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
+             background: rgba(255,255,255,.08); border-radius: 10px; overflow: hidden; }
+    .score > div { background: var(--panel); padding: 13px 15px; }
+    .score .k { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; opacity: .6; }
+    .score .v { font-size: 23px; font-weight: 600; margin-top: 4px;
+                font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+    .score .v.good { color: #34d399; } .score .v.stop { color: #f87171; }
+    .score .s { font-size: 11.5px; opacity: .55; margin-top: 2px; }
+    table.mini { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.mini th { text-align: left; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+                    opacity: .55; padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,.1); }
+    table.mini td { padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+    table.mini td.r { text-align: right; font-variant-numeric: tabular-nums; }
+    .ok-t { color: #34d399; } .no-t { color: #f87171; }
+    pre.stmt { margin: 0; padding: 14px; background: rgba(0,0,0,.35); border-radius: 8px;
+               font: 400 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+               overflow-x: auto; white-space: pre; }
+    .honesty { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .honesty ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+    .honesty h4 { margin: 0; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; opacity: .6; }
+    @media (max-width: 760px) { .honesty { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -449,6 +472,33 @@
           <button class="btn-ghost" onclick="loadParties()">List parties</button>
         </div>
       </div>
+    </section>
+
+
+    <section class="card">
+      <h3 class="panel-title">Measured outcome</h3>
+      <div class="score" id="score">
+        <div><div class="k">Charges attempted</div><div class="v" id="sAtt">—</div><div class="s">by the agent</div></div>
+        <div><div class="k">Blocked by ledger</div><div class="v stop" id="sBlk">—</div><div class="s" id="sBlkS">&nbsp;</div></div>
+        <div><div class="k">Value prevented</div><div class="v stop" id="sPrev">—</div><div class="s">overspend refused</div></div>
+        <div><div class="k">Value settled</div><div class="v good" id="sSet">—</div><div class="s">within mandate</div></div>
+        <div><div class="k">Decision accuracy</div><div class="v" id="sAcc">—</div><div class="s">correct verdicts</div></div>
+        <div><div class="k">Audit records</div><div class="v" id="sAud">—</div><div class="s">on Canton</div></div>
+      </div>
+      <div class="status-note muted" id="sWhere" style="margin-top:10px"></div>
+    </section>
+
+    <section class="card">
+      <h3 class="panel-title">Autonomous agent</h3>
+      <p class="status-note muted" style="margin-top:0">
+        The agent works its own backlog and decides each purchase itself. Three items in
+        it are things a real agent would plausibly get wrong. It does not know which.
+      </p>
+      <div class="button-row">
+        <button class="btn-primary" onclick="runAgent()">Run the agent</button>
+        <button class="btn-ghost" onclick="showStatement()">Statement</button>
+      </div>
+      <div id="agentOut" style="margin-top:12px"></div>
     </section>
 
     <section class="actions">
@@ -514,6 +564,36 @@
     <section class="card">
       <h3 class="panel-title">4 · Audit log</h3>
       <div id="log" class="audit-box"><div class="empty">Nothing has happened yet.</div></div>
+    </section>
+
+    <section class="card">
+      <h3 class="panel-title">5 · Statement</h3>
+      <pre class="stmt" id="stmt">Run the agent to generate a statement.</pre>
+    </section>
+
+    <section class="card">
+      <h3 class="panel-title">What is real, and what is not</h3>
+      <div class="honesty">
+        <div>
+          <h4>Live on Canton DevNet</h4>
+          <ul>
+            <li>The mandate is a real contract on the ledger</li>
+            <li>Cap, period cap, allow-list, expiry and revocation are enforced by <code>Mandate.daml</code></li>
+            <li>Every rejection is an <code>AssertionFailed</code> returned by Canton</li>
+            <li>Charge and revoke audit records are contracts on the ledger</li>
+            <li>Killing this backend loses nothing: the state lives on the ledger</li>
+          </ul>
+        </div>
+        <div>
+          <h4>Not done yet</h4>
+          <ul>
+            <li>No Canton Coin moves. <code>Charge</code> authorises and records spend; it does not transfer Amulet</li>
+            <li>The parties hold a zero balance, so settlement is unproven</li>
+            <li>The allow-list is fixed when the mandate is granted</li>
+            <li>Period windows roll forward on the next charge, not on a timer</li>
+          </ul>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -659,6 +739,60 @@
       }).join("");
     }
 
+
+    async function loadMetrics() {
+      try {
+        const m = await api("/api/metrics");
+        const set = (id, v) => document.getElementById(id).textContent = v;
+        const a = m.agent;
+        set("sAtt", a ? a.attempted : m.chargesAttempted);
+        set("sBlk", a ? a.blocked : m.chargesBlocked);
+        set("sPrev", (a ? a.preventedValue : m.valuePrevented).toFixed(2));
+        set("sSet", (a ? a.settledValue : m.valueSettled).toFixed(2));
+        set("sAcc", a ? a.decisionAccuracy + "%" : "—");
+        set("sAud", m.auditRecordsOnLedger);
+        const rules = Object.entries(m.blockedByRule || {});
+        document.getElementById("sBlkS").textContent =
+          rules.length ? rules.length + " distinct rules" : "\u00a0";
+        document.getElementById("sWhere").textContent =
+          "Enforcement: " + m.enforcement
+          + (m.headroomPeriod !== undefined
+              ? "  ·  headroom " + m.headroomPeriod.toFixed(2) + " this period, "
+                + m.headroomLifetime.toFixed(2) + " lifetime" : "")
+          + (rules.length ? "  ·  blocked by: " + rules.map(([k,v]) => k + " (" + v + ")").join(", ") : "");
+      } catch (e) { /* metrics are best-effort */ }
+    }
+
+    async function runAgent() {
+      const box = document.getElementById("agentOut");
+      box.innerHTML = '<div class="status-note muted">agent working the backlog on the ledger…</div>';
+      try {
+        const d = await api("/api/agent/run", "POST", {});
+        box.innerHTML =
+          '<table class="mini"><thead><tr><th>Item</th><th class="r">Amount</th><th>Vendor</th>'
+          + '<th>Outcome</th><th>Reason the ledger gave</th></tr></thead><tbody>'
+          + d.results.map(r =>
+              '<tr><td>' + r.item + '</td><td class="r">' + r.amount.toFixed(2) + '</td>'
+              + '<td>' + r.vendor + '</td><td class="' + (r.allowed ? "ok-t" : "no-t") + '">'
+              + (r.allowed ? "settled" : "declined") + '</td>'
+              + '<td class="muted">' + (r.reason || "") + '</td></tr>').join("")
+          + '</tbody></table>';
+        toast(d.score.blocked + " of " + d.score.attempted + " attempts refused by the ledger, "
+              + d.score.preventedValue.toFixed(2) + " prevented", true);
+        await refresh(); await loadMetrics(); await showStatement();
+      } catch (e) {
+        box.innerHTML = '<div class="status-note">' + e.message + '</div>';
+        toast(e.message, false);
+      }
+    }
+
+    async function showStatement() {
+      try {
+        const d = await api("/api/statement");
+        document.getElementById("stmt").textContent = d.text;
+      } catch (e) { toast(e.message, false); }
+    }
+
     async function refresh() {
       const d = await api("/api/state");
       const state = document.getElementById("state");
@@ -699,6 +833,7 @@
     }
 
     refresh();
+    loadMetrics();
   </script>
 </body>
 </html>
