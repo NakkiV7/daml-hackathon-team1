@@ -571,6 +571,19 @@
       <pre class="stmt" id="stmt">Run the agent to generate a statement.</pre>
     </section>
 
+
+    <section class="card">
+      <h3 class="panel-title">Settlement</h3>
+      <p class="status-note muted" style="margin-top:0">
+        Authorisation and settlement are separate. The mandate decides whether the
+        agent may spend, on the ledger. Moving the Canton Coin is a second step.
+      </p>
+      <div id="settle" class="status-note muted">checking…</div>
+      <div class="button-row" style="margin-top:10px">
+        <button class="btn-ghost" onclick="loadSettlement()">Re-check</button>
+        <button class="btn-ghost" onclick="doPreapproval()">Request preapproval</button>
+      </div>
+    </section>
     <section class="card">
       <h3 class="panel-title">What is real, and what is not</h3>
       <div class="honesty">
@@ -793,6 +806,28 @@
       } catch (e) { toast(e.message, false); }
     }
 
+
+    async function loadSettlement() {
+      const el = document.getElementById("settle");
+      try {
+        const d = await api("/api/settlement");
+        const ok = d.ready;
+        el.innerHTML =
+          '<span class="chip">' + (ok ? "ready" : "not ready") + '</span> '
+          + 'registry ' + (d.registry ? "reachable" : "unreachable")
+          + ' · instrument ' + (d.instrument || "none")
+          + ' · agent balance ' + d.senderBalance.toFixed(2)
+          + ' · payee balance ' + d.receiverBalance.toFixed(2)
+          + (d.blockedBy.length ? '<br><span class="no-t">blocked: ' + d.blockedBy.join("; ") + '</span>' : "")
+          + '<br><span class="muted" style="font-size:11.5px">fund: ' + d.fundThisParty + '</span>';
+      } catch (e) { el.textContent = e.message; }
+    }
+
+    async function doPreapproval() {
+      try { await api("/api/preapproval", "POST", {}); toast("preapproval requested", true); }
+      catch (e) { toast(e.message, false); }
+    }
+
     async function refresh() {
       const d = await api("/api/state");
       const state = document.getElementById("state");
@@ -834,6 +869,7 @@
 
     refresh();
     loadMetrics();
+    loadSettlement();
   </script>
 </body>
 </html>

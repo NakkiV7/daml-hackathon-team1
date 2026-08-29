@@ -32,6 +32,9 @@ PORT = int(os.environ.get("PORT", "8000"))
 # "live" = every rule enforced by Mandate.daml on Canton DevNet.
 # "mock" = rules mirrored in Python (no ledger needed) for offline demoing.
 MODE = os.environ.get("C8_MODE", "live")
+# Attempt real Canton Coin settlement after an authorised charge. Harmless
+# while the parties are unfunded: it fails cleanly and reports why.
+SETTLE = os.environ.get("C8_SETTLE", "1") != "0"
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proj"))
 try:
@@ -229,7 +232,20 @@ def live_charge(amount, payee):
             "amount": float(amount) if str(amount).replace("-", "").replace(".", "").isdigit() else amount,
             "payee": _short(full), "rule": why, "onLedger": True})
         raise ValueError(why)
-    return {"status": "ok", "amount": float(amount), "payee": _short(full)}
+
+    out = {"status": "ok", "amount": float(amount), "payee": _short(full),
+           "authorised": True}
+    # Authorised on-ledger. Now try to actually move the coin. This only works
+    # once the parties are funded; until then the charge still stands and we say
+    # settlement is pending rather than claiming money moved.
+    if SETTLE:
+        moved, detail = L.settle(p["agent"], full, amount)
+        out["settled"] = moved
+        out["settlement"] = detail
+    else:
+        out["settled"] = False
+        out["settlement"] = {"skipped": "settlement disabled (C8_SETTLE=0)"}
+    return out
 
 
 def live_revoke():
@@ -387,6 +403,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, metrics())
             if self.path == "/api/statement":
                 return self._send(200, {"text": statement_text()})
+            if self.path == "/api/settlement":
+                p = live_parties_setup()
+                r = L.settlement_ready(p["agent"], p["payee"])
+                r["settlementEnabled"] = SETTLE
+                r["fundThisParty"] = p["agent"]
+                return self._send(200, r)
             if self.path in ("/", "/index.html"):
                 with open(os.path.join(os.path.dirname(__file__), "index.html"), "rb") as f:
                     html = f.read()
@@ -413,6 +435,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_revoke())
             if self.path == "/api/agent/run":
                 return self._send(200, agent_run())
+            if self.path == "/api/preapproval":
+                p = live_parties_setup()
+                return self._send(200, {"result": str(L.preapprove(p["payee"]))[:200]})
             if self.path == "/api/reset":
                 if MODE == "live":
                     LIVE["mandateCid"], LIVE["rejects"] = None, []

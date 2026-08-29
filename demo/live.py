@@ -173,3 +173,69 @@ def recover(owner, spender=None):
         if best_key is None or key > best_key:
             best_key, best = key, (ev.get("contractId"), a)
     return best
+
+
+# ---------------------------------------------------------------------------
+# Settlement: actually moving Canton Coin.
+#
+# Authorisation and settlement are two separate things and it matters which is
+# which. Charge is the AUTHORISATION step -- the mandate decides whether the
+# agent is allowed to spend, and that decision is final and on-ledger. Moving
+# the Amulet afterwards is SETTLEMENT.
+#
+# We keep them separate rather than making Charge transfer funds itself, because
+# a token-standard transfer needs disclosed contracts fetched from the registry
+# for that one transaction, which a Daml choice body cannot go and get. So the
+# agent authorises on-ledger first, and only then settles. An unauthorised
+# charge never reaches this code at all.
+# ---------------------------------------------------------------------------
+def balance(p, instrument="Amulet"):
+    """Spendable holdings for a party. Locked holdings do not count."""
+    try:
+        hs = c8lab.holdings(p)
+    except c8lab.LabError:
+        return 0.0
+    return sum(float(h["amount"] or 0) for h in hs
+               if not h["locked"] and h["instrument"] == instrument)
+
+
+def settlement_ready(sender, receiver):
+    """Can we actually move money yet? Reports every precondition separately."""
+    out = {"registry": False, "instrument": None, "senderBalance": 0.0,
+           "receiverBalance": 0.0, "ready": False, "blockedBy": []}
+    try:
+        info = c8lab.registry("/registry/metadata/v1/instruments")
+        names = [i.get("id") for i in info.get("instruments", [])]
+        out["registry"] = True
+        out["instrument"] = "Amulet" if "Amulet" in names else (names[0] if names else None)
+    except Exception as e:
+        out["blockedBy"].append(f"registry unreachable: {str(e).splitlines()[0][:80]}")
+    out["senderBalance"] = balance(sender)
+    out["receiverBalance"] = balance(receiver)
+    if out["senderBalance"] <= 0:
+        out["blockedBy"].append("sender holds no Canton Coin — ask the Cantor8 team to fund it")
+    out["ready"] = out["registry"] and out["senderBalance"] > 0
+    return out
+
+
+def preapprove(receiver, provider=None):
+    """Ask for a TransferPreapproval so incoming transfers settle directly.
+
+    Without one, a transfer arrives as an offer the receiver must accept, and
+    their balance does not move until they do.
+    """
+    return c8lab.create_preapproval_proposal(receiver, provider or receiver)
+
+
+def settle(sender, receiver, amount, instrument="Amulet"):
+    """Move Canton Coin. Returns (ok, detail).
+
+    Called only after the ledger has already authorised the charge. If there is
+    no coin yet this fails cleanly and says so, rather than pretending.
+    """
+    try:
+        r = c8lab.transfer(sender, receiver, str(amount), instrument=instrument)
+        return True, {"transferKind": r.get("transferKind"),
+                      "instructionCid": r.get("instructionCid")}
+    except c8lab.LabError as e:
+        return False, {"error": str(e).splitlines()[0][:200]}
