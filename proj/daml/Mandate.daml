@@ -21,63 +21,51 @@ template Mandate
   with
     owner          : Party      -- who is paying
     spender        : Party      -- merchant, or agent
-    cap            : Decimal    -- total they may spend over the mandate's life
+    cap            : Decimal    -- lifetime cap over the mandate's life
     spent          : Decimal    -- how much so far
-    expiresAt      : Time
     counterparties : [Party]    -- allow-list: spender may only pay these parties
-    -- Per-period limit: at most periodCap per periodLength, on top of the
-    -- lifetime cap. Nothing runs on a timer in Daml, so the period cannot
-    -- reset itself when time passes: Charge rolls the window forward lazily,
-    -- anchored to periodStart. A "month" here is a fixed periodLength (e.g.
-    -- days 30), not a calendar month.
-    periodCap    : Decimal
-    periodSpent  : Decimal  -- spent within the current window
-    periodStart  : Time     -- start of the current window
-    periodLength : RelTime
-    revoked  : Bool       -- true once the owner revokes the mandate
+    expiresAt      : Time
+    periodCap      : Decimal
+    periodSpent    : Decimal
+    periodStart    : Time
+    periodLength   : RelTime
+    revoked        : Bool       -- true once the owner revokes the mandate
   where
     ensure cap > 0.0 && spent >= 0.0 && spent <= cap
       && periodCap > 0.0 && periodSpent >= 0.0 && periodSpent <= periodCap
       && convertRelTimeToMicroseconds periodLength > 0
 
-    -- Both must agree it exists. The owner cannot be signed up without
-    -- consenting, and the spender cannot be bound without consenting.
     signatory owner, spender
 
-    -- Spend within the mandate, to an allow-listed counterparty. No owner
-    -- signature needed, that is the point.
     choice Charge : ContractId Mandate
       with
         amount : Decimal
-        payee  : Party        -- who the spender wants to pay
+        payee  : Party
       controller spender
       do
         now <- getTime
-        -- Deadlines are NOT enforced for you. Check them yourself.
         assertMsg "mandate expired" (now < expiresAt)
         assertMsg "amount must be positive" (amount > 0.0)
-        -- Roll the window forward before checking the period cap. Advance by
-        -- WHOLE periods from periodStart, never to `now`: anchoring to `now`
-        -- would let the spender slide the window by timing their charges.
-        -- A gap of several quiet periods must advance several periods at once.
+        assertMsg "mandate revoked" (not revoked)
+
         let plen = convertRelTimeToMicroseconds periodLength
             elapsed = convertRelTimeToMicroseconds (subTime now periodStart)
-            wholePeriods = elapsed / plen   -- Int `/` truncates in Daml, on purpose
+            wholePeriods = elapsed / plen
             rolledOver = wholePeriods >= 1
             curStart = if rolledOver
                        then addRelTime periodStart (convertMicrosecondsToRelTime (wholePeriods * plen))
                        else periodStart
             curPeriodSpent = if rolledOver then 0.0 else periodSpent
+
         assertMsg "charge would exceed the period cap" (curPeriodSpent + amount <= periodCap)
-        assertMsg "mandate revoked" (not revoked)
         assertMsg "charge would exceed the cap" (spent + amount <= cap)
-        
-        -- Allow-list: the spender may only pay approved counterparties.
         assertMsg "payee not in allow-list" (payee `elem` counterparties)
+
         newMandateCid <- create this with
           spent = spent + amount
           periodSpent = curPeriodSpent + amount
           periodStart = curStart
+
         create MandateChargeAudit with
           owner
           spender
@@ -87,11 +75,9 @@ template Mandate
           at = now
           rule = (if rolledOver then "period rolled over; " else "")
                  <> "period-cap + total-cap + allow-list check"
+
         pure newMandateCid
 
-    -- The owner can always stop it, and the spender cannot block that.
-    -- Keep the mandate alive so the ledger can show a clear revoked state and
-    -- connect the revocation event directly to the mandate's current record.
     choice Revoke : ContractId Mandate
       controller owner
       do
@@ -104,8 +90,6 @@ template Mandate
           reason = "owner revocation"
         pure newMandateCid
 
-    -- Raising the cap or changing who the agent may pay needs both
-    -- parties, because both are signatories.
     choice Adjust : ContractId Mandate
       with
         newCap            : Decimal
@@ -149,10 +133,10 @@ template MandateProposal
     owner          : Party
     spender        : Party
     cap            : Decimal
-    expiresAt      : Time
     counterparties : [Party]
-    periodCap    : Decimal
-    periodLength : RelTime
+    expiresAt      : Time
+    periodCap      : Decimal
+    periodLength   : RelTime
   where
     signatory owner
     observer spender
@@ -160,14 +144,18 @@ template MandateProposal
     choice Accept : ContractId Mandate
       controller spender
       do
-        -- The first period starts when the spender accepts, not when the
-        -- owner proposed: the spender should get a full window.
         now <- getTime
         create Mandate with
-          owner; spender; cap; spent = 0.0; counterparties; expiresAt
-          periodCap; periodLength
+          owner
+          spender
+          cap
+          spent = 0.0
+          counterparties
+          expiresAt
+          periodCap
           periodSpent = 0.0
           periodStart = now
+          periodLength
           revoked = False
 
     choice Reject : ()
