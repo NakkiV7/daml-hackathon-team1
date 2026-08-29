@@ -67,6 +67,15 @@ _raw_request = c8lab._request
 
 
 def _retrying_request(url, body=None, headers=None, method=None, timeout=None):
+    # Reads are idempotent and retried freely. Writes are NEVER retried.
+    #
+    # That is not caution for its own sake: it was measured. DevNet returns a 503
+    # while still forwarding the command, so a retry races the original and
+    # Canton answers SUBMISSION_ALREADY_IN_FLIGHT. The original then commits, and
+    # every contract id held afterwards is stale -- which cascaded into an entire
+    # agent backlog being refused for the wrong reason. A failed write surfaces
+    # instead, and pressing the button again is safe because c8lab mints a fresh
+    # commandId per submission.
     writing = "/v2/commands/" in url
     # Submissions legitimately take longer than a read, so give them the full
     # timeout rather than the short one tuned for spotting a dead IP. Some reads
@@ -74,7 +83,7 @@ def _retrying_request(url, body=None, headers=None, method=None, timeout=None):
     # in the short window even on a healthy connection.
     heavy = "/v2/parties" in url and "?" not in url and url.rstrip("/").endswith("parties")
     per_try = 30.0 if (writing or heavy) else CONNECT_TIMEOUT
-    attempts = RETRIES
+    attempts = 1 if writing else RETRIES
     last = None
     for attempt in range(attempts):
         try:
@@ -82,21 +91,9 @@ def _retrying_request(url, body=None, headers=None, method=None, timeout=None):
         except c8lab.LabError as e:
             msg = str(e)
             last = e
-            if writing:
-                # Retrying a submission is safe *because the body is byte-identical*,
-                # commandId included: if the first attempt did commit, Canton answers
-                # DUPLICATE_COMMAND rather than charging twice, and callers treat that
-                # as "our contract id is stale" and re-read from the ledger.
-                # Only retry gateway-level refusals and stalls, where the command
-                # most likely never reached the ledger at all. A 4xx is a real
-                # verdict -- an assertion failure, say -- and must surface as-is.
-                retryable = ("HTTP 503" in msg or "HTTP 502" in msg
-                             or "HTTP 504" in msg or "timed out" in msg
-                             or "cannot reach" in msg or "network error" in msg)
-            else:
-                retryable = ("timed out" in msg or "timeout" in msg.lower()
-                             or "cannot reach" in msg or "network error" in msg
-                             or "HTTP 503" in msg or "HTTP 502" in msg)
+            retryable = ("timed out" in msg or "timeout" in msg.lower()
+                         or "cannot reach" in msg or "network error" in msg
+                         or "HTTP 503" in msg or "HTTP 502" in msg)
             if not retryable or attempt == attempts - 1:
                 raise
     raise last
@@ -265,15 +262,18 @@ def recover(owner, spender=None):
         if spender and a.get("spender") != spender:
             continue
         # Testing leaves plenty of spent-out and revoked mandates lying around.
-        # Rank on usefulness: not revoked, then still has headroom in both caps,
-        # then most spent (so a restart resumes the one actually in use rather
-        # than jumping to some pristine leftover).
+        # Rank on usefulness: not revoked first, then still has headroom in both
+        # caps, then MOST REMAINING period headroom. Preferring the least-spent
+        # usable mandate matters: picking a nearly-exhausted one makes every
+        # subsequent charge fail on the period cap, which reads like a broken
+        # wallet rather than a stale pick.
         spent = float(a.get("spent") or 0)
         cap = float(a.get("cap") or 0)
         pspent = float(a.get("periodSpent") or 0)
         pcap = float(a.get("periodCap") or 0)
         usable = (not a.get("revoked")) and spent < cap and pspent < pcap
-        key = (0 if a.get("revoked") else 1, 1 if usable else 0, spent)
+        headroom = min(cap - spent, pcap - pspent)
+        key = (0 if a.get("revoked") else 1, 1 if usable else 0, headroom)
         if best_key is None or key > best_key:
             best_key, best = key, (ev.get("contractId"), a)
     return best

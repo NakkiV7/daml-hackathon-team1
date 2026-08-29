@@ -39,7 +39,15 @@ BACKLOG = [
 ]
 
 
-def run(mandate_cid, agent_party, on_event=None, pause=0.0):
+def _looks_stale(reason):
+    """A refusal that means "our contract id is behind", not "the rule said no"."""
+    r = str(reason or "")
+    return ("could not be found" in r or "CONTRACT_NOT_FOUND" in r
+            or "inactive contract" in r or "already in-flight" in r
+            or "DUPLICATE_COMMAND" in r)
+
+
+def run(mandate_cid, agent_party, on_event=None, pause=0.0, owner_party=None):
     """Work the backlog against a live mandate. Returns (new_cid, results)."""
     results = []
     cid = mandate_cid
@@ -49,6 +57,17 @@ def run(mandate_cid, agent_party, on_event=None, pause=0.0):
         vendor = step["vendor"]
         full = vendor if "::" in vendor else L.party(vendor)
         ok, cid, why = L.charge(cid, agent_party, step["amount"], full)
+
+        # Every accepted charge archives the mandate and creates a successor, so
+        # a single network hiccup can leave us holding a superseded id -- and then
+        # every remaining item fails for the wrong reason. Re-read the live
+        # mandate and try this item once more before recording a verdict.
+        if not ok and _looks_stale(why):
+            fresh, _ = L.recover(owner_party or L.party("team1owner"), agent_party)
+            if fresh:
+                cid = fresh
+                ok, cid, why = L.charge(cid, agent_party, step["amount"], full)
+
         r = {
             "item": step["item"], "amount": step["amount"],
             "vendor": VENDOR_LABELS.get(step["vendor"], step["vendor"].split("::")[0]),

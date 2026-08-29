@@ -272,6 +272,15 @@ def live_state():
             "onLedger": True})
     for r in LIVE.setdefault("rejects", []):
         out["audit"].append(r)
+
+    # Audit contracts accumulate on the ledger across every mandate this owner
+    # has ever held, so a demo would open with hundreds of rows from earlier
+    # runs. Show only what happened since the mandate in view was granted.
+    since = LIVE.get("grantedAt")
+    if since:
+        out["audit"] = [e for e in out["audit"] if (e.get("at") or "") >= since]
+        out["auditScoped"] = True
+
     out["audit"].sort(key=lambda e: e["at"])
     for i, e in enumerate(out["audit"], 1):
         e["seq"] = i
@@ -293,6 +302,10 @@ def live_create(cap, period_cap, period_hours, _cps, hours):
             LIVE["mandateCid"] = L.accept(prop, p["agent"])
             LIVE["rejects"] = []
             LIVE["agentResults"] = None
+            # Everything before this instant belongs to an earlier mandate.
+            LIVE["grantedAt"] = (datetime.datetime.now(datetime.timezone.utc)
+                                 - datetime.timedelta(seconds=5)
+                                 ).isoformat(timespec="seconds").replace("+00:00", "")
             return live_state()["mandate"]
         except c8lab.LabError as e:
             last = e
@@ -370,7 +383,24 @@ def agent_run():
         resync()
     if not LIVE["mandateCid"]:
         raise ValueError("no mandate on the ledger yet — grant one first")
-    cid, results = AG.run(LIVE["mandateCid"], p["agent"])
+
+    # The backlog needs about 90 of the period budget. Running it against a
+    # nearly-spent mandate refuses almost everything, which looks like a broken
+    # wallet when it is really just the wrong starting point. Say so instead.
+    st = L.read_mandate(LIVE["mandateCid"], p["owner"])
+    if st:
+        need = 90.0
+        room = min(float(st["cap"]) - float(st["spent"]),
+                   float(st["periodCap"]) - float(st["periodSpent"]))
+        if st.get("revoked"):
+            raise ValueError("this mandate is revoked — grant a new one before "
+                             "running the agent")
+        if room < need:
+            raise ValueError(
+                f"only {room:.2f} of budget left and the backlog needs about "
+                f"{need:.0f}. Press Grant mandate for a fresh one, then run the agent.")
+
+    cid, results = AG.run(LIVE["mandateCid"], p["agent"], owner_party=p["owner"])
     LIVE["mandateCid"] = cid
     LIVE["agentResults"] = results
     # Rejected agent charges belong in the audit view too.
@@ -610,6 +640,7 @@ class Handler(BaseHTTPRequestHandler):
                 if MODE == "live":
                     LIVE["mandateCid"], LIVE["rejects"] = None, []
                     LIVE["agentResults"], LIVE["recovered"] = None, False
+                    LIVE["grantedAt"] = None
                 else:
                     STATE["mandate"], STATE["audit"] = None, []
                 return self._send(200, {"ok": True})
