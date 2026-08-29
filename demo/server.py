@@ -316,6 +316,27 @@ def statement_text():
     return AG.statement(results, s.get("mandate"))
 
 
+# ---------------------------------------------------------------------------
+# Mode-aware dispatch. Every caller -- HTTP, the autonomous agent, and the MCP
+# server an LLM drives -- must go through these, or a path could reach the
+# Python mirror while the demo claims the ledger is enforcing the rules.
+# ---------------------------------------------------------------------------
+def do_create(cap, period_cap, period_hours, counterparties, hours):
+    if MODE == "live":
+        return live_create(cap, period_cap, period_hours, counterparties, hours)
+    return create_mandate(cap, period_cap, period_hours, counterparties, hours)
+
+
+def do_charge(amount, payee):
+    if MODE == "live":
+        return live_charge(amount, payee)
+    return charge(amount, payee)
+
+
+def do_revoke():
+    return live_revoke() if MODE == "live" else revoke()
+
+
 def live_ledger():
     if not C8LAB_OK:
         raise ValueError(f"c8lab import failed: {C8LAB_ERR}")
@@ -385,12 +406,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/mandate":
                 a = (b.get("cap", 500), b.get("periodCap", 100), b.get("periodHours", 24),
                      b.get("counterparties", ["team1aws"]), b.get("hours", 720))
-                return self._send(200, live_create(*a) if MODE == "live" else create_mandate(*a))
+                return self._send(200, do_create(*a))
             if self.path == "/api/charge":
-                return self._send(200, live_charge(b.get("amount"), b.get("payee"))
-                                  if MODE == "live" else charge(b.get("amount"), b.get("payee")))
+                return self._send(200, do_charge(b.get("amount"), b.get("payee")))
             if self.path == "/api/revoke":
-                return self._send(200, live_revoke() if MODE == "live" else revoke())
+                return self._send(200, do_revoke())
             if self.path == "/api/agent/run":
                 return self._send(200, agent_run())
             if self.path == "/api/reset":

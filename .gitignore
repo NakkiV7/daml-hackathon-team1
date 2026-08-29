@@ -17,3 +17,8 @@ proj/log/
 
 # OS
 .DS_Store
+
+# Python build artifacts
+__pycache__/
+*.pyc
+.pytest_cache/

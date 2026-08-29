@@ -30,7 +30,7 @@ mcp = FastMCP(
 
 def _normalise_counterparties(counterparties):
     if counterparties is None:
-        return ["Merchant", "Cloud"]
+        return ["team1aws"]
     if isinstance(counterparties, str):
         counterparties = [counterparties]
     values = []
@@ -38,7 +38,7 @@ def _normalise_counterparties(counterparties):
         text = str(item).strip()
         if text:
             values.append(text)
-    return values or ["Merchant", "Cloud"]
+    return values or ["team1aws"]
 
 
 @mcp.tool()
@@ -60,7 +60,7 @@ def create_mandate_tool(
         period_cap = cap
     if period_hours <= 0:
         raise ValueError("period_hours must be greater than zero")
-    return wallet_server.create_mandate(
+    return wallet_server.do_create(
         cap=cap,
         period_cap=period_cap,
         period_hours=period_hours,
@@ -76,7 +76,7 @@ def charge_mandate_tool(amount: float, payee: str) -> dict:
         raise ValueError("amount must be greater than zero")
     if not payee or not str(payee).strip():
         raise ValueError("payee is required")
-    result = wallet_server.charge(amount=amount, payee=str(payee).strip())
+    result = wallet_server.do_charge(amount=amount, payee=str(payee).strip())
     return {
         "status": "ok",
         "event": result,
@@ -86,7 +86,7 @@ def charge_mandate_tool(amount: float, payee: str) -> dict:
 @mcp.tool()
 def revoke_mandate_tool() -> dict:
     """Revoke the active mandate. This matches the owner-controlled Daml choice."""
-    result = wallet_server.revoke()
+    result = wallet_server.do_revoke()
     return {
         "status": "ok",
         "event": result,
