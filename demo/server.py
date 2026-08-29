@@ -29,6 +29,9 @@ import json, os, sys, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("PORT", "8000"))
+# "live" = every rule enforced by Mandate.daml on Canton DevNet.
+# "mock" = rules mirrored in Python (no ledger needed) for offline demoing.
+MODE = os.environ.get("C8_MODE", "live")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proj"))
 try:
@@ -36,6 +39,23 @@ try:
     C8LAB_OK, C8LAB_ERR = True, None
 except Exception as e:
     C8LAB_OK, C8LAB_ERR = False, str(e)
+
+try:
+    import live as L
+    LIVE_OK, LIVE_ERR = True, None
+except Exception as e:
+    LIVE_OK, LIVE_ERR = False, str(e)
+
+# Live-mode handles. OWNER grants, AGENT spends, PAYEE is the approved payee.
+LIVE = {"mandateCid": None, "owner": None, "agent": None, "payee": None}
+
+
+def live_parties_setup():
+    if not LIVE["owner"]:
+        LIVE["owner"] = L.party("team1owner")
+        LIVE["agent"] = L.party("team1agent")
+        LIVE["payee"] = L.party("team1aws")
+    return LIVE
 
 
 def now():
@@ -129,8 +149,89 @@ def revoke():
 
 
 def get_state():
-    return {"mandate": STATE["mandate"], "audit": STATE["audit"],
+    if MODE == "live":
+        return live_state()
+    return {"mode": "mock", "mandate": STATE["mandate"], "audit": STATE["audit"],
             "c8lab": C8LAB_OK, "base": (c8lab.BASE if C8LAB_OK else None)}
+
+
+# ---------------------------------------------------------------------------
+# LIVE mode: every rule below is enforced by Mandate.daml on Canton, not here.
+# ---------------------------------------------------------------------------
+def _short(p):
+    return p.split("::")[0] if p else None
+
+
+def live_state():
+    p = live_parties_setup()
+    out = {"mode": "live", "c8lab": C8LAB_OK, "base": c8lab.BASE,
+           "parties": {k: p[k] for k in ("owner", "agent", "payee")},
+           "mandateCid": LIVE["mandateCid"], "mandate": None, "audit": []}
+    if LIVE["mandateCid"]:
+        st = L.read_mandate(LIVE["mandateCid"], p["owner"])
+        if st:
+            out["mandate"] = {
+                "owner": _short(st["owner"]), "spender": _short(st["spender"]),
+                "cap": float(st["cap"]), "spent": float(st["spent"]),
+                "periodCap": float(st["periodCap"]),
+                "periodSpent": float(st["periodSpent"]),
+                "periodHours": round(int(st["periodLength"]["microseconds"]) / 3.6e9, 2),
+                "counterparties": [_short(c) for c in st["counterparties"]],
+                "expiresAt": st["expiresAt"], "revoked": bool(st["revoked"]),
+            }
+    for i, a in enumerate(L.audit(p["owner"]), 1):
+        out["audit"].append({
+            "seq": i, "type": a["_kind"], "status": "ok",
+            "at": (a.get("at") or "").replace("Z", ""),
+            "amount": float(a["amount"]) if a.get("amount") else None,
+            "payee": _short(a.get("payee")),
+            "rule": a.get("rule") or a.get("reason") or "",
+            "onLedger": True})
+    for r in LIVE.setdefault("rejects", []):
+        out["audit"].append(r)
+    out["audit"].sort(key=lambda e: e["at"])
+    for i, e in enumerate(out["audit"], 1):
+        e["seq"] = i
+    return out
+
+
+def live_create(cap, period_cap, period_hours, _cps, hours):
+    p = live_parties_setup()
+    prop = L.propose(p["owner"], p["agent"], [p["payee"]],
+                     cap, period_cap, period_hours, days=max(1, int(hours / 24)))
+    LIVE["mandateCid"] = L.accept(prop, p["agent"])
+    LIVE["rejects"] = []
+    return live_state()["mandate"]
+
+
+def live_charge(amount, payee):
+    p = live_parties_setup()
+    if not LIVE["mandateCid"]:
+        raise ValueError("no mandate on the ledger yet — grant one first")
+    # Resolve a short name to a full party id so the allow-list check is real.
+    full = {"team1aws": p["payee"], "aws": p["payee"],
+            "team1owner": p["owner"], "team1agent": p["agent"]}.get(payee, payee)
+    ok, cid, why = L.charge(LIVE["mandateCid"], p["agent"], amount, full)
+    LIVE["mandateCid"] = cid
+    if not ok:
+        LIVE.setdefault("rejects", []).append({
+            "seq": 0, "type": "charge", "status": "rejected",
+            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", ""),
+            "amount": float(amount) if str(amount).replace("-", "").replace(".", "").isdigit() else amount,
+            "payee": _short(full), "rule": why, "onLedger": True})
+        raise ValueError(why)
+    return {"status": "ok", "amount": float(amount), "payee": _short(full)}
+
+
+def live_revoke():
+    p = live_parties_setup()
+    if not LIVE["mandateCid"]:
+        raise ValueError("no mandate on the ledger yet")
+    ok, cid, why = L.revoke(LIVE["mandateCid"], p["owner"])
+    LIVE["mandateCid"] = cid
+    if not ok:
+        raise ValueError(why)
+    return {"status": "ok"}
 
 
 def live_ledger():
@@ -196,26 +297,34 @@ class Handler(BaseHTTPRequestHandler):
         try:
             b = self._body()
             if self.path == "/api/mandate":
-                return self._send(200, create_mandate(
-                    b.get("cap", 500), b.get("periodCap", 100),
-                    b.get("periodHours", 24),
-                    b.get("counterparties", ["AWS", "OpenAI"]),
-                    b.get("hours", 720)))
+                a = (b.get("cap", 500), b.get("periodCap", 100), b.get("periodHours", 24),
+                     b.get("counterparties", ["team1aws"]), b.get("hours", 720))
+                return self._send(200, live_create(*a) if MODE == "live" else create_mandate(*a))
             if self.path == "/api/charge":
-                return self._send(200, charge(b.get("amount"), b.get("payee")))
+                return self._send(200, live_charge(b.get("amount"), b.get("payee"))
+                                  if MODE == "live" else charge(b.get("amount"), b.get("payee")))
             if self.path == "/api/revoke":
-                return self._send(200, revoke())
+                return self._send(200, live_revoke() if MODE == "live" else revoke())
             if self.path == "/api/reset":
-                STATE["mandate"], STATE["audit"] = None, []
+                if MODE == "live":
+                    LIVE["mandateCid"], LIVE["rejects"] = None, []
+                else:
+                    STATE["mandate"], STATE["audit"] = None, []
                 return self._send(200, {"ok": True})
             self._send(404, {"error": "not found"})
         except ValueError as e:
             self._send(400, {"error": str(e)})
+        except Exception as e:
+            self._send(400, {"error": f"{type(e).__name__}: {e}"})
 
 
 if __name__ == "__main__":
     print(f"backend  http://localhost:{PORT}")
+    print(f"mode     {MODE.upper()}" + ("  (rules enforced by Mandate.daml on Canton)"
+                                        if MODE == "live" else "  (rules mirrored in Python)"))
     print(f"c8lab    {'imported' if C8LAB_OK else 'FAILED: ' + str(C8LAB_ERR)}")
+    if MODE == "live" and not LIVE_OK:
+        print(f"live.py  FAILED: {LIVE_ERR}")
     if C8LAB_OK:
         print(f"ledger   {c8lab.BASE}")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

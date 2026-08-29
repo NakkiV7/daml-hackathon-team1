@@ -198,7 +198,7 @@
         <div class="f"><label>Lifetime cap</label><input id="cap" value="500"></div>
         <div class="f"><label>Period cap</label><input id="periodCap" value="100"></div>
         <div class="f"><label>Period length (h)</label><input id="periodHours" value="24"></div>
-        <div class="f"><label>Allow-list</label><input id="cps" value="AWS, OpenAI"></div>
+        <div class="f"><label>Allow-list</label><input id="cps" value="team1aws"></div>
         <div class="f"><label>Expires in (h)</label><input id="hours" value="720"></div>
         <div class="actions">
           <button class="solid" onclick="createMandate()">Grant mandate</button>
@@ -210,7 +210,7 @@
       <fieldset>
         <legend>Agent — spend</legend>
         <div class="f"><label>Amount</label><input id="amount" value="25"></div>
-        <div class="f"><label>Payee</label><input id="payee" value="AWS"></div>
+        <div class="f"><label>Payee</label><input id="payee" value="team1aws"></div>
         <div class="actions">
           <button class="solid" onclick="doCharge()">Charge</button>
           <button onclick="checkLedger()">Check ledger</button>
@@ -277,16 +277,16 @@
 const ATTACKS = [
   { label: "Burst the per-period cap",
     why: "one large charge inside an otherwise valid mandate",
-    amount: 999, payee: "AWS" },
+    amount: 999, payee: "team1aws" },
   { label: "Pay a counterparty that was never approved",
     why: "move funds to an attacker-controlled party",
     amount: 5, payee: "attacker" },
   { label: "Negative amount to run the balance backwards",
     why: "arithmetic abuse to manufacture headroom",
-    amount: -50, payee: "AWS" },
-  { label: "Case-variant payee to slip past the allow-list",
-    why: "string-matching probe: 'aws' is not 'AWS'",
-    amount: 5, payee: "aws" },
+    amount: -50, payee: "team1aws" },
+  { label: "Pay a party that is not on the allow-list",
+    why: "pay the owner, who is not on the allow-list",
+    amount: 5, payee: "team1owner" },
 ];
 
 function flash(msg, ok) {
