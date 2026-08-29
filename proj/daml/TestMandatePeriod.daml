@@ -16,6 +16,7 @@ testPeriodCap : Script ()
 testPeriodCap = script do
   alice <- allocateParty "Alice"
   agent <- allocateParty "Agent"
+  shop  <- allocateParty "Shop"
 
   let t0 = time (date 2026 Jan 1) 12 0 0
       at d = time (date 2026 Jan 1) 12 0 0 `addDays` d
@@ -25,52 +26,53 @@ testPeriodCap = script do
     createCmd MandateProposal with
       owner = alice; spender = agent
       cap = 1000.0; expiresAt = at 365
+      counterparties = [shop]
       periodCap = 100.0; periodLength = days 30
   m <- submit agent do exerciseCmd prop Accept
 
   -- Within the period cap: fine, no owner signature.
-  m <- submit agent do exerciseCmd m Charge with amount = 60.0
+  m <- submit agent do exerciseCmd m Charge with amount = 60.0; payee = shop
 
   -- 60 + 50 would be 110 in this period. Lifetime cap has plenty of room;
   -- the PERIOD cap is what rejects this, on the ledger.
-  submitMustFail agent do exerciseCmd m Charge with amount = 50.0
+  submitMustFail agent do exerciseCmd m Charge with amount = 50.0; payee = shop
 
   -- Exactly up to the period cap is allowed. <=, not <.
-  m <- submit agent do exerciseCmd m Charge with amount = 40.0
+  m <- submit agent do exerciseCmd m Charge with amount = 40.0; payee = shop
 
   -- Period exhausted: even a tiny charge fails.
-  submitMustFail agent do exerciseCmd m Charge with amount = 0.01
+  submitMustFail agent do exerciseCmd m Charge with amount = 0.01; payee = shop
 
-  -- One microsecond before the period boundary: still the old window.
+  -- One second before the period boundary: still the old window.
   setTime (time (date 2026 Jan 31) 11 59 59)
-  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0; payee = shop
 
   -- At exactly t0 + 30 days the new window opens, full allowance again.
   setTime (at 30)
-  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0; payee = shop
 
   -- Quiet gap of several periods, then a charge on day 100. The window
   -- must advance by WHOLE periods: 100 days is 3 whole periods, so the
   -- current window started on day 90, not on day 100.
   setTime (at 100)
-  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0; payee = shop
 
   -- Day 119 is 29 days after the day-90 window start: same window, and the
   -- window is full. If the implementation had anchored the window to the
   -- last charge (day 100), this would still fail; the next assert is the
   -- one that tells the two apart.
   setTime (at 119)
-  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0; payee = shop
 
   -- Day 120 = day 90 + one whole period: new window. An implementation
   -- that re-anchored to the day-100 charge would wrongly reject this
   -- until day 130.
   setTime (at 120)
-  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0; payee = shop
 
   -- The owner can still revoke instantly, mid-period.
   submit alice do exerciseCmd m Revoke
-  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0; payee = shop
   pure ()
 
 -- The lifetime cap still binds across periods: 150 total, 100 per period.
@@ -78,6 +80,7 @@ testTotalCapAcrossPeriods : Script ()
 testTotalCapAcrossPeriods = script do
   alice <- allocateParty "Alice2"
   agent <- allocateParty "Agent2"
+  shop  <- allocateParty "Shop2"
 
   let t0 = time (date 2026 Jan 1) 12 0 0
   setTime t0
@@ -86,19 +89,20 @@ testTotalCapAcrossPeriods = script do
     createCmd MandateProposal with
       owner = alice; spender = agent
       cap = 150.0; expiresAt = time (date 2027 Jan 1) 12 0 0
+      counterparties = [shop]
       periodCap = 100.0; periodLength = days 30
   m <- submit agent do exerciseCmd prop Accept
 
-  m <- submit agent do exerciseCmd m Charge with amount = 100.0
+  m <- submit agent do exerciseCmd m Charge with amount = 100.0; payee = shop
 
   -- New period, fresh period allowance, but only 50 of lifetime cap left.
   setTime (time (date 2026 Mar 1) 12 0 0)
-  submitMustFail agent do exerciseCmd m Charge with amount = 60.0
-  m <- submit agent do exerciseCmd m Charge with amount = 50.0
+  submitMustFail agent do exerciseCmd m Charge with amount = 60.0; payee = shop
+  m <- submit agent do exerciseCmd m Charge with amount = 50.0; payee = shop
 
   -- Lifetime cap exhausted; no amount of waiting brings it back.
   setTime (time (date 2026 Dec 1) 12 0 0)
-  submitMustFail agent do exerciseCmd m Charge with amount = 1.0
+  submitMustFail agent do exerciseCmd m Charge with amount = 1.0; payee = shop
   pure ()
 
 addDays : Time -> Int -> Time

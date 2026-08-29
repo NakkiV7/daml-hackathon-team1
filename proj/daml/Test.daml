@@ -31,6 +31,7 @@ testMandate : Script ()
 testMandate = script do
   alice    <- allocateParty "Alice"
   merchant <- allocateParty "Merchant"
+  supplier <- allocateParty "Supplier"
   now      <- getTime
   let deadline = addRelTime now (hours 24)
 
@@ -38,18 +39,19 @@ testMandate = script do
   prop <- submit alice do
     createCmd MandateProposal with
       owner = alice; spender = merchant; cap = 100.0; expiresAt = deadline
+      counterparties = [supplier]
       periodCap = 100.0; periodLength = days 30
   m <- submit merchant do exerciseCmd prop Accept
 
   -- Charging within the cap works, with no signature from Alice.
-  m <- submit merchant do exerciseCmd m Charge with amount = 30.0
-  m <- submit merchant do exerciseCmd m Charge with amount = 50.0
+  m <- submit merchant do exerciseCmd m Charge with amount = 30.0; payee = supplier
+  m <- submit merchant do exerciseCmd m Charge with amount = 50.0; payee = supplier
 
   -- Over the cap fails ON THE LEDGER. This is the whole task.
-  submitMustFail merchant do exerciseCmd m Charge with amount = 40.0
+  submitMustFail merchant do exerciseCmd m Charge with amount = 40.0; payee = supplier
 
   -- Alice cannot charge herself using the merchant's choice.
-  submitMustFail alice do exerciseCmd m Charge with amount = 1.0
+  submitMustFail alice do exerciseCmd m Charge with amount = 1.0; payee = supplier
 
   -- Raising the cap needs both signatures, so the merchant cannot do it alone.
   submitMustFail merchant do exerciseCmd m Adjust with newCap = 500.0
@@ -59,5 +61,5 @@ testMandate = script do
   submit alice do exerciseCmd m Revoke
 
   -- The mandate is gone, so nothing more can be charged.
-  submitMustFail merchant do exerciseCmd m Charge with amount = 1.0
+  submitMustFail merchant do exerciseCmd m Charge with amount = 1.0; payee = supplier
   pure ()

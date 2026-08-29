@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+devnet.env
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.next/
+.vite/
+
+# Daml
+proj/.daml/
+proj/log/
+
+# OS
+.DS_Store

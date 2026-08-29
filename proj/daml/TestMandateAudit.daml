@@ -8,6 +8,7 @@ testAuditTrail : Script ()
 testAuditTrail = script do
   owner <- allocatePartyByHint (PartyIdHint "Owner")
   spender <- allocatePartyByHint (PartyIdHint "Spender")
+  merchant <- allocatePartyByHint (PartyIdHint "Merchant")
 
   now <- getTime
   let expiresAt = addRelTime now (hours 24)
@@ -18,6 +19,7 @@ testAuditTrail = script do
       spender = spender
       cap = 100.0
       spent = 0.0
+      counterparties = [merchant]
       expiresAt = expiresAt
       periodCap = 100.0
       periodSpent = 0.0
@@ -27,6 +29,7 @@ testAuditTrail = script do
   chargeCid <- submit spender do
     exerciseCmd mandateCid Charge with
       amount = 25.0
+      payee = merchant
 
   chargeEntries <- query @MandateChargeAudit owner
   assert (length chargeEntries == 1)
@@ -34,6 +37,7 @@ testAuditTrail = script do
   submitMustFail spender do
     exerciseCmd chargeCid Charge with
       amount = 90.0
+      payee = merchant
 
   submit owner do
     exerciseCmd chargeCid Revoke

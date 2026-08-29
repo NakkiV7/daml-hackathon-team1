@@ -8,8 +8,8 @@ DevNet:
     export C8_BASE=https://api.validator.dev.digik.cantor8.tech/api/ledger
     export C8_IDP=https://auth.dev.digik.cantor8.tech
     export C8_CLIENT_ID=hackathon
-    export C8_CLIENT_SECRET=...
-    export C8_REGISTRY=https://<registry-host>        # needed for transfers
+    export C8_CLIENT_SECRET=0JElLeAZK7fcRF4ngghM2s7XWxPgDYSD
+    export C8_REGISTRY=https://sv-proxy.dev.digik.cantor8.tech
     python3 c8lab.py check
 
 Canton Coin on DevNet is served by the SV scan proxy, which uses the plain
